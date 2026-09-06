@@ -2,7 +2,6 @@
 #define AUTO_AIM__PLANNER_HPP
 
 #include <Eigen/Dense>
-#include <chrono>
 #include <list>
 #include <memory>
 #include <optional>
@@ -11,7 +10,6 @@
 #include "../../tracking/target.hpp"
 #include "tinympc/tiny_api.hpp"
 #include "tools/logger.hpp"
-#include "tools/yaw_delay_model.hpp"
 
 namespace auto_aim
 {
@@ -29,19 +27,16 @@ using Trajectory = Eigen::Matrix<double, 4, HORIZON>;  // yaw, yaw_vel, pitch, p
 
 struct Plan
 {
-  bool control = false;
-  bool fire = false;
-  float target_yaw = 0;
-  float target_pitch = 0;
-  float yaw = 0;
-  float yaw_vel = 0;
-  float yaw_acc = 0;
-  float pitch = 0;
-  float pitch_vel = 0;
-  float pitch_acc = 0;
-  float yaw_delay = 0;
-  int yaw_delay_direction = 0;
-  bool yaw_reversing = false;
+  bool control;
+  bool fire;
+  float target_yaw;
+  float target_pitch;
+  float yaw;
+  float yaw_vel;
+  float yaw_acc;
+  float pitch;
+  float pitch_vel;
+  float pitch_acc;
 };
 
 struct TinySolverDeleter
@@ -77,9 +72,39 @@ public:
   /** @brief 使用动力学策略规划云台轨迹 @param target 跟踪目标 @param bullet_speed 弹速，单位 m/s @return 云台控制计划 */
   Plan plan(Target target, double bullet_speed);
   /** @brief 预测目标并按指定策略规划 @param target 可选跟踪目标 @param bullet_speed 弹速，单位 m/s @param gimbal_yaw 当前云台偏航角 @param strategy 开火策略 @return 云台控制计划；无目标时 control 为 false */
-  Plan plan(
-    std::optional<Target> target, double bullet_speed, double gimbal_yaw = 0,
-    ShootStrategy strategy = Dynamics);
+  inline Plan plan(std::optional<Target> target, 
+            double bullet_speed, 
+            double gimbal_yaw = 0,
+            ShootStrategy strategy = Dynamics){
+
+    if (!target.has_value()) return {false};
+
+    double delay_time =
+      (std::abs(target->ekf_x()[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_) + gimbal_delay_;
+
+    if(std::abs(target->ekf_x()[7]) > decision_speed_) tools::logger()->warn("std::abs(target->ekf_x()[7]) > {}", decision_speed_);
+
+    auto future = std::chrono::steady_clock::now() + std::chrono::microseconds(int(delay_time * 1e6));
+    is_far = false;
+    is_high = false;
+    
+    target->predict(future);
+
+    switch (strategy)
+    {
+    case Dynamics:
+      return plan(*target, bullet_speed);
+    case rbSuppressiveFire:
+      return rbplan(*target, bullet_speed, gimbal_yaw);
+    case rbHero:
+      return rbHeroplan(*target, bullet_speed, gimbal_yaw);
+    case SB:
+      return sbplan(*target, bullet_speed, gimbal_yaw);
+    default:
+      tools::logger()->error("Unknown shoot strategy: {}", static_cast<int>(strategy));
+      return {false};
+    }
+  }
   /** @brief 使用步兵压制射击策略规划 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return 云台控制计划 */
   Plan rbplan(Target target, double bullet_speed, double gimbal_yaw);
   /** @brief 使用哨兵策略规划 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return 云台控制计划 */
@@ -109,8 +134,6 @@ private:
 
   int last_selected_idx = -1;
   Eigen::Vector3d last_selected_xyz = Eigen::Vector3d::Zero();
-  tools::YawDelayModel yaw_delay_model_;
-  double last_yaw_command_velocity_ = 0;
 
   /** @brief 初始化偏航轴 MPC 求解器 @param config_path YAML 配置路径 */
   void setup_yaw_solver(const std::string & config_path);
@@ -127,9 +150,6 @@ private:
   Trajectory get_trajectory(Target  target, double yaw0, double bullet_speed);
   /** @brief 生成步兵策略预测轨迹 @param target 跟踪目标 @param yaw0 初始偏航角 @param bullet_speed 弹速 @return 规划时域轨迹 */
   Trajectory rbget_trajectory(Target target, double yaw0, double bullet_speed);
-  /** @brief 使用独立 yaw/pitch 目标预测生成步兵轨迹 */
-  Trajectory rbget_trajectory_split(
-    Target yaw_target, Target pitch_target, double yaw0, double bullet_speed);
 
   std::chrono::steady_clock::time_point outpost_z_stable_start_time_;
   bool outpost_is_make = true;

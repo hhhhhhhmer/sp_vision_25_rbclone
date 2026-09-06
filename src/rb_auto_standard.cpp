@@ -98,9 +98,6 @@ int main(int argc, char * argv[])
         data["plan_yaw"] = plan.yaw / CV_PI * 180. ;
         data["plan_yaw_vel"] = plan.yaw_vel;
         data["plan_yaw_acc"] = plan.yaw_acc;
-        data["yaw_delay_used_ms"] = plan.yaw_delay * 1000.0;
-        data["yaw_delay_direction"] = plan.yaw_delay_direction;
-        data["yaw_reversing"] = plan.yaw_reversing ? 1 : 0;
 
         data["plan_pitch"] = plan.pitch * 57.3;
         data["plan_pitch_vel"] = plan.pitch_vel;

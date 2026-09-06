@@ -1,6 +1,5 @@
 #include "planner.hpp"
 
-#include <cmath>
 #include <vector>
 #include <stdexcept>
 
@@ -12,35 +11,6 @@ using namespace std::chrono_literals;
 
 namespace auto_aim
 {
-namespace
-{
-std::vector<tools::YawDelayPoint> read_yaw_delay_curve(
-  const YAML::Node & yaml, const char * direction)
-{
-  const auto curve = yaml["yaw_delay_curve"][direction];
-  if (!curve || !curve.IsSequence() || curve.size() == 0) {
-    throw std::invalid_argument(std::string("yaw_delay_curve.") + direction + " must be a non-empty sequence");
-  }
-
-  std::vector<tools::YawDelayPoint> points;
-  points.reserve(curve.size());
-  for (const auto & point : curve) {
-    if (!point.IsSequence() || point.size() != 2) {
-      throw std::invalid_argument(
-        std::string("yaw_delay_curve.") + direction + " points must be [speed_rad_s, delay_s]");
-    }
-    try {
-      points.push_back({point[0].as<double>(), point[1].as<double>()});
-    } catch (const YAML::Exception & error) {
-      throw std::invalid_argument(
-        std::string("yaw_delay_curve.") + direction + " contains non-numeric values: " +
-        error.what());
-    }
-  }
-  return points;
-}
-}  // namespace
-
 Planner::Planner(const std::string & config_path) : config_path_(config_path)
 {
   auto yaml = tools::load(config_path);
@@ -60,29 +30,6 @@ Planner::Planner(const std::string & config_path) : config_path_(config_path)
   gimbal_control_delay = tools::read<double>(yaml, "gimbal_control_delay");
   tower_pitch_prediction_time_ = tools::read<double>(yaml, "tower_pitch_prediction_time");
   gimbal_delay_ = tools::read<double>(yaml, "gimbal_delay");
-  const auto yaw_delay_curve = yaml["yaw_delay_curve"];
-  if (yaw_delay_curve.IsDefined()) {
-    if (!yaw_delay_curve.IsMap()) {
-      throw std::invalid_argument("yaw_delay_curve must be a map with positive and negative curves");
-    }
-    try {
-      const auto positive = read_yaw_delay_curve(yaml, "positive");
-      const auto negative = read_yaw_delay_curve(yaml, "negative");
-      const double reverse_penalty = yaml["yaw_reverse_penalty"]
-                                       ? yaml["yaw_reverse_penalty"].as<double>()
-                                       : 0.0;
-      const double deadband = yaml["yaw_direction_deadband"]
-                                ? yaml["yaw_direction_deadband"].as<double>()
-                                : 0.2;
-      const double reverse_window = yaml["yaw_reverse_window"]
-                                      ? yaml["yaw_reverse_window"].as<double>()
-                                      : 0.05;
-      yaw_delay_model_ = tools::YawDelayModel(
-        positive, negative, reverse_penalty, deadband, reverse_window);
-    } catch (const YAML::Exception & error) {
-      throw std::invalid_argument(std::string("invalid yaw delay configuration: ") + error.what());
-    }
-  }
   shoot_offset_ = tools::read<int>(yaml, "shoot_offset");
   if (!valid_shoot_offset(shoot_offset_)) {
     throw std::invalid_argument("shoot_offset must keep the firing index inside the MPC horizon");
@@ -100,46 +47,8 @@ Planner::Planner(const Planner & other) : Planner(other.config_path_)
   is_high = other.is_high;
   last_selected_idx = other.last_selected_idx;
   last_selected_xyz = other.last_selected_xyz;
-  yaw_delay_model_ = other.yaw_delay_model_;
-  last_yaw_command_velocity_ = other.last_yaw_command_velocity_;
   outpost_z_stable_start_time_ = other.outpost_z_stable_start_time_;
   outpost_is_make = other.outpost_is_make;
-}
-
-Plan Planner::plan(
-  std::optional<Target> target, double bullet_speed, double gimbal_yaw,
-  ShootStrategy strategy)
-{
-  if (!target.has_value()) return {};
-
-  const double target_model_delay =
-    std::abs(target->ekf_x()[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
-  if (std::abs(target->ekf_x()[7]) > decision_speed_) {
-    tools::logger()->warn(
-      "std::abs(target->ekf_x()[7]) > {}", decision_speed_);
-  }
-
-  is_far = false;
-  is_high = false;
-  const auto now = std::chrono::steady_clock::now();
-  const double initial_delay =
-    strategy == rbSuppressiveFire ? target_model_delay : target_model_delay + gimbal_delay_;
-  target->predict(now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                           std::chrono::duration<double>(initial_delay)));
-
-  switch (strategy) {
-    case Dynamics:
-      return plan(*target, bullet_speed);
-    case rbSuppressiveFire:
-      return rbplan(*target, bullet_speed, gimbal_yaw);
-    case rbHero:
-      return rbHeroplan(*target, bullet_speed, gimbal_yaw);
-    case SB:
-      return sbplan(*target, bullet_speed, gimbal_yaw);
-    default:
-      tools::logger()->error("Unknown shoot strategy: {}", static_cast<int>(strategy));
-      return {};
-  }
 }
 
 Planner & Planner::operator=(const Planner & other)
@@ -506,6 +415,7 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   target_h+= target_h_error_;
   auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, target_h);
   
+  target.predict(bullet_traj.fly_time);
   is_far = min_dist > 5.0;
   is_high = target_h > 1.3;
 
@@ -514,81 +424,30 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   // 2. Get trajectory
   double yaw0;
   Trajectory traj;
-  const auto now = std::chrono::steady_clock::now();
-  const double pitch_delay = gimbal_delay_;
-  double yaw_delay = gimbal_delay_;
-  double yaw_reference_velocity = 0;
-  Target pitch_target = target;
-  pitch_target.predict(pitch_delay + bullet_traj.fly_time);
+  Eigen::Vector2d yaw_pitch;
   try {
-    for (int iteration = 0; iteration < 3; ++iteration) {
-      Target yaw_target = target;
-      yaw_target.predict(yaw_delay + bullet_traj.fly_time);
-      yaw0 = aim(yaw_target, bullet_speed)(0);
-      traj = rbget_trajectory_split(yaw_target, pitch_target, yaw0, bullet_speed);
-      if (!traj.allFinite()) throw std::runtime_error("non-finite yaw/pitch reference trajectory");
-
-      if (!yaw_delay_model_.enabled()) break;
-      // Use the forward difference of the generated yaw reference. This is
-      // the command velocity seen by the gimbal, rather than the target EKF's
-      // angular velocity.
-      yaw_reference_velocity = tools::limit_rad(
-        traj(0, HALF_HORIZON + 1) - traj(0, HALF_HORIZON)) / DT;
-      auto candidate_model = yaw_delay_model_;
-      const double updated_delay = candidate_model.query(
-        yaw_reference_velocity, last_yaw_command_velocity_, now);
-      if (!std::isfinite(updated_delay) || updated_delay < 0 || updated_delay > 0.2) {
-        throw std::runtime_error("invalid yaw delay query result");
-      }
-      if (std::abs(updated_delay - yaw_delay) < 0.001 || iteration == 2) {
-        // On the final allowed pass keep the delay that generated `traj`, so
-        // the reported delay and reference trajectory remain consistent.
-        if (std::abs(updated_delay - yaw_delay) < 0.001) yaw_delay = updated_delay;
-        break;
-      }
-      yaw_delay = updated_delay;
-    }
+    yaw_pitch = aim(target, bullet_speed);
+    yaw0 = yaw_pitch(0);
+    traj = rbget_trajectory(target, yaw0, bullet_speed);
   } catch (const std::exception & e) {
-    tools::logger()->warn("Unsolvable target {:.2f}: {}", bullet_speed, e.what());
+    tools::logger()->warn("Unsolvable target {:.2f}", bullet_speed);
     return {false};
   }
-
-  if (!traj.allFinite() || !std::isfinite(yaw_delay)) {
-    tools::logger()->warn("Invalid rb trajectory or yaw delay");
-    return {false};
-  }
-  target = pitch_target;
 
   // 3. Solve yaw
   Eigen::VectorXd x0(2);
   x0 << traj(0, 0), traj(1, 0);
-  if (
-    !yaw_solver_ || !yaw_solver_->work || tiny_set_x0(yaw_solver_.get(), x0) != 0) {
-    tools::logger()->warn("Yaw TinyMPC setup failed for rb target");
-    return {false};
-  }
+  tiny_set_x0(yaw_solver_.get(), x0);
+
   yaw_solver_->work->Xref = traj.block(0, 0, 2, HORIZON);
-  if (
-    tiny_solve(yaw_solver_.get()) != 0 ||
-    !yaw_solver_->work->x.allFinite() || !yaw_solver_->work->u.allFinite()) {
-    tools::logger()->warn("Yaw TinyMPC failed for rb target");
-    return {false};
-  }
+  tiny_solve(yaw_solver_.get());
 
   // 4. Solve pitch
   x0 << traj(2, 0), traj(3, 0);
-  if (
-    !pitch_solver_ || !pitch_solver_->work || tiny_set_x0(pitch_solver_.get(), x0) != 0) {
-    tools::logger()->warn("Pitch TinyMPC setup failed for rb target");
-    return {false};
-  }
+  tiny_set_x0(pitch_solver_.get(), x0);
+
   pitch_solver_->work->Xref = traj.block(2, 0, 2, HORIZON);
-  if (
-    tiny_solve(pitch_solver_.get()) != 0 ||
-    !pitch_solver_->work->x.allFinite() || !pitch_solver_->work->u.allFinite()) {
-    tools::logger()->warn("Pitch TinyMPC failed for rb target");
-    return {false};
-  }
+  tiny_solve(pitch_solver_.get());
 
   Plan plan{};
   plan.control = true;
@@ -604,17 +463,8 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   plan.pitch = pitch_solver_->work->x(0, HALF_HORIZON);
   plan.pitch_vel = pitch_solver_->work->x(1, HALF_HORIZON);
   plan.pitch_acc = pitch_solver_->work->u(0, HALF_HORIZON);
-  if (
-    !std::isfinite(plan.yaw) || !std::isfinite(plan.yaw_vel) || !std::isfinite(plan.yaw_acc) ||
-    !std::isfinite(plan.pitch) || !std::isfinite(plan.pitch_vel) ||
-    !std::isfinite(plan.pitch_acc)) {
-    tools::logger()->warn("rb TinyMPC returned non-finite control");
-    return {false};
-  }
-  plan.yaw_delay = static_cast<float>(yaw_delay);
-  plan.yaw_delay_direction = yaw_delay_model_.enabled()
-                               ? yaw_delay_model_.direction(yaw_reference_velocity)
-                               : 0;
+
+  
 
   // 前哨站迭代限制
   if (target.name == ArmorName::outpost) {
@@ -652,26 +502,6 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
         plan.pitch_acc = 0;
       }
   }
-
-  if (
-    !std::isfinite(plan.yaw) || !std::isfinite(plan.yaw_vel) || !std::isfinite(plan.yaw_acc) ||
-    !std::isfinite(plan.pitch) || !std::isfinite(plan.pitch_vel) ||
-    !std::isfinite(plan.pitch_acc)) {
-    tools::logger()->warn("rb control override returned non-finite values");
-    return {false};
-  }
-  if (yaw_delay_model_.enabled()) {
-    // Commit direction/reversal state using the command that was actually
-    // emitted by MPC (including any outpost safety override).
-    try {
-      yaw_delay_model_.query(plan.yaw_vel, last_yaw_command_velocity_, now);
-    } catch (const std::exception & e) {
-      tools::logger()->warn("Yaw delay state update failed: {}", e.what());
-      yaw_delay_model_.reset();
-    }
-    plan.yaw_reversing = yaw_delay_model_.reversal_active(now);
-  }
-  last_yaw_command_velocity_ = plan.yaw_vel;
 
   // 开火判断依据
   auto is_fire = [this](const double plan_yaw, const Target& target_, bool tower_fixed_pitch){

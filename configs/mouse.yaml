@@ -48,21 +48,6 @@ decision_speed: 8 # rad/s
 high_speed_delay_time: 0.013 # s
 low_speed_delay_time: 0.013 #s
 gimbal_delay: 0.001
-# 实测后启用 yaw 速度相关延迟；曲线值为 [|yaw_command_velocity| rad/s, delay s]
-# yaw_delay_curve:
-#   positive:
-#     - [0.0, 0.002]
-#     - [3.0, 0.004]
-#     - [6.0, 0.008]
-#     - [10.0, 0.014]
-#   negative:
-#     - [0.0, 0.002]
-#     - [3.0, 0.005]
-#     - [6.0, 0.009]
-#     - [10.0, 0.016]
-# yaw_reverse_penalty: 0.002
-# yaw_direction_deadband: 0.2
-# yaw_reverse_window: 0.05
 shoot_offset: 2
 
 #####-----shooter参数-----#####

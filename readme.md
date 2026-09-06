@@ -291,33 +291,6 @@ pitch_offset: -1  # degree 2   pitch偏移量
 配置文件找到以上参数位置并对其更改
 
 ### 8. 调planner和延迟
-
-#### 慢、中、快目标自转角速度区间
-
-后续调试统一使用目标 EKF 状态中的 `target.ekf_x()[7]` 表示目标绕竖直轴的自转角速度，内部计算单位为 `rad/s`。分组时使用角速度绝对值，正负只表示旋转方向。当前 `rb_auto_standard` 和 `rb_auto_aim_debug` 写入 Plotter 的 `ekf_vyaw` 已乘以 `57.3`，日志单位实际为 `degree/s`，按日志分组时必须使用下表中的 `|ekf_vyaw|` 日志范围或先除以 `57.3`。
-
-| 调试分组 | 内部 `|target.ekf_x()[7]|` | Plotter `|ekf_vyaw|` | 约合转速 | 说明 |
-| --- | --- | --- | --- | --- |
-| 慢速 | `[0, 3)` rad/s | `[0, 171.9)` degree/s | `[0, 28.6)` rpm | 静止、低速小陀螺和低速旋转目标 |
-| 中速 | `[3, 6)` rad/s | `[171.9, 343.8)` degree/s | `[28.6, 57.3)` rpm | 中速小陀螺 |
-| 快速 | `[6, 10)` rad/s | `[343.8, 573.0)` degree/s | `[57.3, 95.5)` rpm | 高速小陀螺 |
-| 超出标定范围 | `>= 10` rad/s | `>= 573.0` degree/s | `>= 95.5` rpm | 单独记录，不与快速组混合；需要补充更高速标定点 |
-
-换算公式：
-
-```text
-rpm = rad/s * 60 / (2*pi) ~= rad/s * 9.5493
-```
-
-以上区间只用于实机采样、命中率统计和问题定位，不会自动修改配置中的 `decision_speed`。例如 `decision_speed: 8` 仍然是代码选择高/低速目标模型延迟的独立阈值。
-
-还需要区分两个角速度：
-
-- `|target.ekf_x()[7]|` 是目标自身旋转角速度；Plotter 中对应的 `|ekf_vyaw|` 当前为 `degree/s`，用于上表的慢、中、快目标分组。
-- `|plan_yaw_vel|`（运行时查询使用参考轨迹的 yaw 角速度）是云台所需角速度，用于标定和查询 `yaw_delay_curve`。延迟曲线的横坐标不能直接用 `ekf_vyaw` 代替。
-
-采集 yaw 延迟数据时，应在每个目标速度组内分别统计正向、负向和换向片段，并同时记录 `ekf_vyaw`、`plan_yaw_vel`、`gimbal_yaw`、`gimbal_yaw_vel` 和 `yaw_delay_used_ms`。
-
 ```yaml
 high_speed_delay_time: 0.09          # s  高速小陀螺发弹延迟
 low_speed_delay_time: 0.09           # s  低速小陀螺&平移发弹延迟

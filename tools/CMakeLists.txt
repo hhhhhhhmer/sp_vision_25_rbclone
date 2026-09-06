@@ -15,5 +15,4 @@ add_library(tools OBJECT
     crc.cpp
     fft.cpp
     fps_solve.cpp
-    yaw_delay_model.cpp
 )

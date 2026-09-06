@@ -195,11 +195,6 @@ add_test(NAME thread_pool_test COMMAND thread_pool_test)
 
 add_executable(plotter_replay tools/plotter_replay.cpp tools/plotter.cpp)
 
-add_executable(yaw_delay_analyzer tools/yaw_delay_analyzer.cpp)
-target_link_libraries(
-    yaw_delay_analyzer
-    ${OpenCV_LIBS} fmt::fmt yaml-cpp spdlog::spdlog nlohmann_json::nlohmann_json tools)
-
 add_executable(plotter_test tests/plotter_test.cpp tools/plotter.cpp)
 add_test(NAME plotter_test COMMAND plotter_test)
 
@@ -225,19 +220,6 @@ target_link_libraries(
 add_test(
     NAME planner_raii_test
     COMMAND planner_raii_test ${PROJECT_SOURCE_DIR}/configs/sb_long.yaml)
-
-add_executable(yaw_delay_model_test tests/yaw_delay_model_test.cpp)
-target_link_libraries(
-    yaw_delay_model_test
-    ${OpenCV_LIBS} fmt::fmt yaml-cpp spdlog::spdlog tools)
-add_test(NAME yaw_delay_model_test COMMAND yaw_delay_model_test)
-
-add_test(
-    NAME yaw_delay_analyzer_test
-    COMMAND
-      ${CMAKE_COMMAND}
-      -DANALYZER=$<TARGET_FILE:yaw_delay_analyzer>
-      -P ${PROJECT_SOURCE_DIR}/tests/yaw_delay_analyzer_test.cmake)
 
 add_executable(
     kf_posterior_residual_test

@@ -1,6 +1,9 @@
 #ifndef BINOCUAR_AIM_HPP
 #define BINOCUAR_AIM_HPP
 
+#include <atomic>
+#include <cstdint>
+
 #include "../io/camera.hpp"
 #include "../tasks/auto_aim/planner/planner.hpp"
 #include "../tasks/auto_aim/solver.hpp"
@@ -57,17 +60,28 @@ struct BinocularAim{
 
   // 缓冲区 far2near and near2far
   double short2long_point =  5.0;//(short_max_far + long_min_near)/2.;
-  double long2short_point = 3.5;
+  double long2short_point = 3.50;
+
+  std::atomic<int> force_control_frames{0};
+
+  std::uint64_t generation() const
+  {
+    return switch_generation_.load(std::memory_order_acquire);
+  }
 
   /// @brief 长短焦强制切换
-  void Switch(auto_aim::Tracker& tracker, bool forced_switch = false){
+  bool Switch(
+    auto_aim::Tracker& tracker, bool forced_switch = false,
+    bool update_tracker_solver = true){
 
     if(!forced_switch){
-      if(tools::delta_time(std::chrono::steady_clock::now(), switch_time_point) < 3.0) return ;
-      if(is_short && tracker.get_update_count() < 70 ) return;      
+      if(tools::delta_time(std::chrono::steady_clock::now(), switch_time_point) < 3.0) return false;
+      if(is_short && tracker.get_update_count() < 70 ) return false;
     }
+    bool switched = false;
     auto is_switch = [&](){
-      this->cameras.aim_ptr->clear_camera_frame_buffer();
+      auto & target_camera = is_short ? this->cameras.long_aim : this->cameras.short_aim;
+      target_camera.clear_camera_frame_buffer();
       // this->cameras.aim_ptr->pause();
       this->cameras.Switch();
       this->solvers.Switch();
@@ -75,7 +89,11 @@ struct BinocularAim{
       // this->cameras.aim_ptr->resume();
       is_short = !is_short;
       switch_time_point = std::chrono::steady_clock::now();
-      tracker.setSolver(this->solvers.aim_ptr); 
+      if (update_tracker_solver) tracker.setSolver(this->solvers.aim_ptr);
+      switch_generation_.fetch_add(1, std::memory_order_release);
+      switched = true;
+
+      force_control_frames = 5;
       
       // if(is_short)
       // {
@@ -96,6 +114,7 @@ struct BinocularAim{
       if(camera_state == CameraState::short_camera_is_off_line && is_short) is_switch();
     }
 
+    return switched;
   }
 
   bool read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp, auto_aim::Tracker& tracker){
@@ -151,13 +170,15 @@ struct BinocularAim{
   }
 
   /// @brief 长短焦自动切换逻辑
-  void ChangeTheScope(auto_aim::Target target , auto_aim::Tracker& tracker){
+  bool ChangeTheScope(
+    auto_aim::Target target, auto_aim::Tracker& tracker,
+    bool update_tracker_solver = true){
 
     auto now = std::chrono::steady_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(now - switch_time_point).count();
     
     if (elapsed_time < 1000) {
-        return; // 在冷却时间内，直接退出，不执行切换判断
+        return false; // 在冷却时间内，直接退出，不执行切换判断
     }
     const auto x_est = target.getEKFXest();
     const double x = x_est(0), y = x_est(2), z = x_est(4);
@@ -169,12 +190,16 @@ struct BinocularAim{
     
     if(is_short && dis > short2long_point ){
       // tools::logger()->info("切换至长焦镜头, dis = {}", dis);
-      Switch(tracker);
+      return Switch(tracker, false, update_tracker_solver);
     }else if(!is_short && dis < long2short_point){
       // tools::logger()->info("切换至短焦镜头 dis = {}", dis);
-      Switch(tracker);
+      return Switch(tracker, false, update_tracker_solver);
     }
+    return false;
   }
+
+private:
+  std::atomic<std::uint64_t> switch_generation_{0};
 };
 
 #endif //BINOCUAR_AIM_HPP

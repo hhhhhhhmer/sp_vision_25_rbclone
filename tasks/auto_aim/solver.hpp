@@ -4,6 +4,7 @@
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
 #include <Eigen/Geometry>
 #include <opencv2/core/eigen.hpp>
+#include <vector>
 
 #include "armor.hpp"
 
@@ -17,6 +18,14 @@ public:
   Eigen::Matrix3d R_gimbal2world() const;
 
   void set_R_gimbal2world(const Eigen::Quaterniond & q);
+
+  void set_R_gimbal2world_from_tf(const Eigen::Quaterniond & q);
+
+  void set_camera_calibration(
+    const Eigen::Matrix3d & camera_matrix, const std::vector<double> & distort_coeffs);
+
+  void set_camera2gimbal(
+    const Eigen::Matrix3d & R_camera2gimbal, const Eigen::Vector3d & t_camera2gimbal);
 
   void solve(Armor & armor) const;
 

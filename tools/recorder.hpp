@@ -5,6 +5,7 @@
 #include <chrono>
 #include <fstream>
 #include <opencv2/opencv.hpp>
+#include <string>
 #include <thread>
 
 #include "tools/thread_safe_queue.hpp"
@@ -17,7 +18,8 @@ public:
   ~Recorder();
   void record(
     const cv::Mat & img, const Eigen::Quaterniond & q,
-    const std::chrono::steady_clock::time_point & timestamp);
+    const std::chrono::steady_clock::time_point & timestamp,
+    const std::string & stream_id = "default");
 
 private:
   struct FrameData
@@ -25,19 +27,27 @@ private:
     cv::Mat img;
     Eigen::Quaterniond q;
     std::chrono::steady_clock::time_point timestamp;
+    std::string stream_id;
   };
   bool init_;
   std::atomic<bool> stop_thread_;
   double fps_;
   std::string text_path_;
+  std::string video_base_path_;
   std::string video_path_;
+  std::string active_stream_id_;
+  std::string last_stream_id_;
   std::ofstream text_writer_;
   cv::VideoWriter video_writer_;
+  cv::Size video_size_;
+  int video_type_ = -1;
+  std::size_t segment_index_ = 0;
   std::chrono::steady_clock::time_point start_time_;
   std::chrono::steady_clock::time_point last_time_;
-  tools::ThreadSafeQueue<FrameData> queue_;
+  tools::ThreadSafeQueue<FrameData, true> queue_;
   std::thread saving_thread_;  // 负责保存帧数据的线程
-  void init(const cv::Mat & img);
+  void init(const cv::Mat & img, const std::string & stream_id);
+  bool open_video_segment(const cv::Mat & img, const std::string & stream_id);
   void save_to_file();
 };
 

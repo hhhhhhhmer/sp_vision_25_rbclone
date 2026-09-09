@@ -20,7 +20,11 @@ public:
   ~HikRobot() override;
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
   bool try_read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
-  void clear_camera_frame_buffer() { MV_CC_ClearImageBuffer(handle_);}
+  void clear_camera_frame_buffer() override
+  {
+    queue_.clear();
+    if (handle_ != nullptr) MV_CC_ClearImageBuffer(handle_);
+  }
 
 private:
   struct CameraData
@@ -38,11 +42,11 @@ private:
   std::thread daemon_thread_;
   std::atomic<bool> daemon_quit_;
 
-  void * handle_;
+  void * handle_ = nullptr;
   std::thread capture_thread_;
   
   std::atomic<bool> capture_quit_;
-  tools::ThreadSafeQueue<CameraData> queue_;
+  tools::ThreadSafeQueue<CameraData, true> queue_;
 
   int vid_, pid_;
 

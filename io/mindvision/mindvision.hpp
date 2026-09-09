@@ -18,7 +18,7 @@ public:
   ~MindVision() override;
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
   bool try_read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
-  void clear_camera_frame_buffer() {}
+  void clear_camera_frame_buffer() override { queue_.clear(); }
 private:
   struct CameraData
   {
@@ -32,7 +32,7 @@ private:
   bool quit_, ok_;
   std::thread capture_thread_;
   std::thread daemon_thread_;
-  tools::ThreadSafeQueue<CameraData> queue_;
+  tools::ThreadSafeQueue<CameraData, true> queue_;
   int vid_, pid_;
 
   void open();

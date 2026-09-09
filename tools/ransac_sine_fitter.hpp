@@ -3,7 +3,7 @@
 #include <Eigen/Dense>
 #include <deque>
 #include <iostream>
-#include <random>
+#include <limits>
 #include <vector>
 
 namespace tools
@@ -19,6 +19,7 @@ public:
     double phi = 0.0;
     double C = 0.0;
     int inliers = 0;
+    double rms = std::numeric_limits<double>::infinity();
   };
   Result best_result_;
 
@@ -28,23 +29,33 @@ public:
 
   void fit();
 
+  void clear();
+
+  size_t sample_count() const;
+
+  double time_span() const;
+
+  double inlier_ratio() const;
+
+  bool ready(
+    size_t min_samples, double min_time_span, double min_inlier_ratio,
+    double max_rms = std::numeric_limits<double>::infinity()) const;
+
   double sine_function(double t, double A, double omega, double phi, double C)
   {
     return A * std::sin(omega * t + phi) + C;
   }
 
 private:
-  int max_iterations_;
   double threshold_;
   double min_omega_;
   double max_omega_;
-  std::mt19937 gen_;
   std::deque<std::pair<double, double>> fit_data_;
 
-  bool fit_partial_model(
-    const std::vector<std::pair<double, double>> & sample, double omega, Eigen::Vector3d & params);
+  bool fit_weighted_model(
+    double omega, const std::vector<double> & weights, Eigen::Vector3d & params) const;
 
-  int evaluate_inliers(double A, double omega, double phi, double C);
+  Result evaluate_model(double A, double omega, double phi, double C) const;
 };
 
 }  // namespace tools

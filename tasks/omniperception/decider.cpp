@@ -30,9 +30,12 @@ Decider::Decider(const std::string & config_path) : detector_(config_path), coun
 io::VisionToGimbal Decider::decide_g(
   auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos,
    io::Camera & omn_cam1_l, io::Camera & omn_cam2_r,
-  const auto_aim::Solver & left_solver, const auto_aim::Solver & right_solver
+  const auto_aim::Solver & left_solver, const auto_aim::Solver & right_solver,
+  float * target_distance
   )
 {
+  if (target_distance != nullptr) *target_distance = 0.0f;
+
   Eigen::Vector2d delta_angle;
   io::Camera * cams[] = {&omn_cam1_l, &omn_cam2_r};
 
@@ -77,12 +80,14 @@ io::VisionToGimbal Decider::decide_g(
 
   if(!empty){
     delta_angle = this->delta_angle_3d(armors, cams[count_]->main_and_secondary, left_solver, right_solver);
+    const auto distance = static_cast<float>(armors.front().xyz_in_gimbal.norm());
+    if (target_distance != nullptr) *target_distance = distance;
     
 
     tools::logger()->debug(
-      "[{} camera] delta yaw:{:.2f},target pitch:{:.2f},armor number:{},armor name:{}",
+      "[{} camera] delta yaw:{:.2f},target pitch:{:.2f},distance:{:.2f}m,armor number:{},armor name:{}",
       ( cams[count_]->main_and_secondary), delta_angle[0]*57.3, delta_angle[1]*57.3,
-      armors.size(), auto_aim::ARMOR_NAMES[armors.front().name]);
+      distance, armors.size(), auto_aim::ARMOR_NAMES[armors.front().name]);
 
 
       
@@ -290,7 +295,7 @@ Eigen::Vector2d Decider::delta_angle_3d(
     left_solver.omn_dig_yaw_solve(armors.front(), Eigen::Vector3d(0,0,-(105. * CV_PI / 180.0)), Eigen::Vector3d(-0.127611, -0.136932, 0.16) );
     auto xyz = armors.front().xyz_in_gimbal;
     tools::logger()->info("omn_xyz :x{}, y{} ,z{}", xyz(0), xyz(1), xyz(2));
-    auto ypd_angle = 140 /57.3 - std::atan2(xyz(0), xyz(1));
+    auto ypd_angle = 145 /57.3 - std::atan2(xyz(0), xyz(1));
     delta_angle[0] = ypd_angle;
     delta_angle[1] =std::atan2(xyz(2), std::sqrt(xyz(0) * xyz(0) + xyz(1) * xyz(1))); 
     return delta_angle;        

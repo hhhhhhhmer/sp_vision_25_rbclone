@@ -16,6 +16,7 @@ Planner::Planner(const std::string & config_path)
   yaw_offset_ = tools::read<double>(yaml, "yaw_offset") / 57.3;
   pitch_offset_ = tools::read<double>(yaml, "pitch_offset") / 57.3;
   far_pitch_offset_ = tools::read<double>(yaml, "far_pitch_offset") / 57.3;
+  far_high_pitch_offset_ = tools::read<double>(yaml, "far_high_pitch_offset") / 57.3;
   target_dist_error_ = tools::read<double>(yaml, "target_dist_error");
   target_h_error_ = tools::read<double>(yaml, "target_h_error");
   fire_thresh_ = tools::read<double>(yaml, "fire_thresh");
@@ -27,6 +28,8 @@ Planner::Planner(const std::string & config_path)
   tower_and_base_armor_tolerance_ = tools::read<double>(yaml, "tower_and_base_armor_tolerance_");
   gimbal_control_delay = tools::read<double>(yaml, "gimbal_control_delay");
   tower_pitch_prediction_time_ = tools::read<double>(yaml, "tower_pitch_prediction_time");
+  gimbal_delay_ = tools::read<double>(yaml, "gimbal_delay");
+  shoot_offset_ = tools::read<int>(yaml, "shoot_offset");
 
   setup_yaw_solver(config_path);
   setup_pitch_solver(config_path);
@@ -103,7 +106,7 @@ Plan Planner::plan(Target target, double bullet_speed)
   plan.pitch_vel = pitch_solver_->work->x(1, HALF_HORIZON);
   plan.pitch_acc = pitch_solver_->work->u(0, HALF_HORIZON);
 
-  auto shoot_offset_ = 2;
+  // auto shoot_offset_ = 2;
   plan.fire =
     std::hypot(
       traj(0, HALF_HORIZON + shoot_offset_) - yaw_solver_->work->x(0, HALF_HORIZON + shoot_offset_),
@@ -146,7 +149,7 @@ Plan Planner::sbplan(Target target, double bullet_speed, double gimbal_yaw)
   
   target.predict(bullet_traj.fly_time);
 
-  tools::logger()->info("h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", target_h, min_dist, xyz.norm(), bullet_traj.fly_time);
+  // tools::logger()->info("h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", target_h, min_dist, xyz.norm(), bullet_traj.fly_time);
 
   // 2. Get trajectory
   double yaw0;
@@ -232,7 +235,7 @@ Plan Planner::sbplan(Target target, double bullet_speed, double gimbal_yaw)
       }
   }
 
-  auto shoot_offset_ = 2;
+  // auto shoot_offset_ = 2;
   if(abs(tools::limit_rad((gimbal_yaw )/57.3 - yaw_offset_ - plan.target_yaw)) * 57.3 < 3){
     plan.fire =
       std::hypot(
@@ -256,7 +259,7 @@ Plan Planner::sbplan(Target target, double bullet_speed, double gimbal_yaw)
 
 
 bool Planner::rbShoot(Target target, double gimbal_yaw, bool tower_fixed_pitch){
-    bool suggest_fire = 1;
+  bool suggest_fire = 1;
     // auto x_est = target.getEKFXest();
     // double est_x =  x_est(0);
     // double est_y = x_est(2);
@@ -283,19 +286,47 @@ bool Planner::rbShoot(Target target, double gimbal_yaw, bool tower_fixed_pitch){
   if(target.name == ArmorName::base || target.name == ArmorName::outpost) shoot_range = tower_and_base_armor_tolerance_;
 
     // 打击范围计算
-  double ax = target_armor_xyza(0) - 0.5f * shoot_range * sin(target_yaw);
-  double ay = target_armor_xyza(1) + 0.5f * shoot_range * cos(target_yaw);
-  double bx = target_armor_xyza(0) + 0.5f * shoot_range * sin(target_yaw);
-  double by = target_armor_xyza(1) - 0.5f * shoot_range * cos(target_yaw);
-  double angle_a = atan2(ay, ax);
-  double angle_b = atan2(by, bx);
-  double angle_c = atan2(target_armor_xyza(1), target_armor_xyza(0));
-  // double allow_fire_ang_max = angle_c - angle_b;
-  // double allow_fire_ang_min = angle_c - angle_a;
-  double allow_fire_ang_max = std::max(angle_a, angle_b) - angle_c;
-  double allow_fire_ang_min = std::min(angle_a, angle_b) - angle_c;
-  allow_fire_ang_max = tools::limit_rad(allow_fire_ang_max);
-  allow_fire_ang_min = tools::limit_rad(allow_fire_ang_min);
+
+  // 左边缘（沿切线正方向偏移半宽）
+  double left_x = target_armor_xyza(0) + 0.5 * shoot_range * (-sin(target_yaw));
+  double left_y = target_armor_xyza(1) + 0.5 * shoot_range * cos(target_yaw);
+
+  // 右边缘（沿切线负方向偏移半宽）
+  double right_x = target_armor_xyza(0) - 0.5 * shoot_range * (-sin(target_yaw));
+  double right_y = target_armor_xyza(1) - 0.5 * shoot_range * cos(target_yaw);
+
+
+  // 目标中心方向
+  double center_angle = atan2(target_armor_xyza(1), target_armor_xyza(0));
+  // 当前云台偏差（相对于中心）
+  double delta = tools::limit_rad(center_angle - gimbal_yaw);
+
+
+  double left_angle = atan2(left_y, left_x);
+  double right_angle = atan2(right_y, right_x);
+  // 计算左右边缘相对于中心的角度偏移
+  double d_left = tools::limit_rad(left_angle - center_angle);
+  double d_right = tools::limit_rad(right_angle - center_angle);
+
+  // 取较小的和较大的偏移（因为左右边缘距离中心不会超过 90°，所以 d_left 和 d_right 符号相反且绝对值 < π/2）
+  double d_min = std::min(d_left, d_right);
+  double d_max = std::max(d_left, d_right);
+
+
+
+  // double ax = target_armor_xyza(0) - 0.5f * shoot_range * sin(target_yaw);
+  // double ay = target_armor_xyza(1) + 0.5f * shoot_range * cos(target_yaw);
+  // double bx = target_armor_xyza(0) + 0.5f * shoot_range * sin(target_yaw);
+  // double by = target_armor_xyza(1) - 0.5f * shoot_range * cos(target_yaw);
+  // double angle_a = atan2(ay, ax);
+  // double angle_b = atan2(by, bx);
+  // double angle_c = atan2(target_armor_xyza(1), target_armor_xyza(0));
+  // // double allow_fire_ang_max = angle_c - angle_b;
+  // // double allow_fire_ang_min = angle_c - angle_a;
+  // double allow_fire_ang_max = std::max(angle_a, angle_b) - angle_c;
+  // double allow_fire_ang_min = std::min(angle_a, angle_b) - angle_c;
+  // allow_fire_ang_max = tools::limit_rad(allow_fire_ang_max);
+  // allow_fire_ang_min = tools::limit_rad(allow_fire_ang_min);
   
 
   // pitch
@@ -304,19 +335,23 @@ bool Planner::rbShoot(Target target, double gimbal_yaw, bool tower_fixed_pitch){
     suggest_pitch = false;
   }
 
-  // yaw_ang_ref
-  double control_delta_angle =
-      tools::limit_rad(atan2(target_armor_xyza(1), target_armor_xyza(0)) - gimbal_yaw );
-  suggest_fire = (control_delta_angle < allow_fire_ang_max &&
-                  control_delta_angle > allow_fire_ang_min && suggest_pitch) ;
+  // // yaw_ang_ref
+  // double control_delta_angle =
+  //     tools::limit_rad(atan2(target_armor_xyza(1), target_armor_xyza(0)) - gimbal_yaw );
+  // suggest_fire = (control_delta_angle < allow_fire_ang_max &&
+  //                 control_delta_angle > allow_fire_ang_min && suggest_pitch) ;
+
+  // 判断 delta 是否在 [d_min, d_max] 范围内
+  suggest_fire = (delta >= d_min && delta <= d_max) && suggest_pitch;
 
 
 
-  if(!outpost_is_make) suggest_fire = 0;
-  if(suggest_fire){
-    // tools::logger()->info("fire! control_delta_angle: {},  allow_fire_ang_max: {}, allow_fire_ang_min: {}",
+  if(!outpost_is_make && target.name == ArmorName::outpost) suggest_fire = 0;
+  if(!suggest_fire){
+    // tools::logger()->info("not fire! control_delta_angle: {},  allow_fire_ang_max: {}, allow_fire_ang_min: {}",
     //   control_delta_angle, allow_fire_ang_max, allow_fire_ang_min
     // );
+    
   }
     
     return suggest_fire;
@@ -353,15 +388,17 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, target_h);
   
   target.predict(bullet_traj.fly_time);
+  is_far = min_dist > 5.0;
+  is_high = target_h > 1.3;
 
-  // tools::logger()->info("h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", target_h, min_dist, xyz.norm(), bullet_traj.fly_time);
+  tools::logger()->info("h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", target_h, min_dist, xyz.norm(), bullet_traj.fly_time);
 
   // 2. Get trajectory
   double yaw0;
   Trajectory traj;
   Eigen::Vector2d yaw_pitch;
   try {
-    yaw_pitch = rbaim(target, bullet_speed);
+    yaw_pitch = aim(target, bullet_speed);
     yaw0 = yaw_pitch(0);
     traj = rbget_trajectory(target, yaw0, bullet_speed);
   } catch (const std::exception & e) {
@@ -408,11 +445,11 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
       auto now = std::chrono::steady_clock::now();
 
       // 如果Z轴变化幅度大于指定阈值（例如0.05米），重置基准和计时器，并禁止开火
-      if (vz > 0.09) { 
-          outpost_z_stable_start_time_ = now;
-          // suggest_fire = false; 
-          outpost_is_make = false;
-      } else {
+      // if (vz > 0.09) { 
+      //     outpost_z_stable_start_time_ = now;
+      //     // suggest_fire = false; 
+      //     outpost_is_make = false;
+      // } else {
         // 如果变化幅度在阈值内，判断持续时间是否达到 0.7 秒
         double stable_duration = tools::delta_time(now ,outpost_z_stable_start_time_ );
         if (
@@ -424,7 +461,7 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
         else{
           outpost_is_make = true;
         }
-      }
+      // }
 
       if(!outpost_is_make){
         Eigen::Vector2d yaw_pitch_nan = heroaim(target, 100000, gimbal_yaw);
@@ -438,18 +475,69 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
       }
   }
 
-  // plan.fire =
-  //   std::hypot(
-  //     traj(0, HALF_HORIZON + shoot_offset_) - yaw_solver_->work->x(0, HALF_HORIZON + shoot_offset_),
-  //     traj(2, HALF_HORIZON + shoot_offset_) -
-  //       pitch_solver_->work->x(0, HALF_HORIZON + shoot_offset_)) < fire_thresh_;
-  target.predict(-gimbal_control_delay);
-  plan.fire = rbShoot(target, (gimbal_yaw )/57.3 - yaw_offset_);
+  // 开火判断依据
+  auto is_fire = [this](const double plan_yaw, const Target& target_, bool tower_fixed_pitch){
+    bool suggest_fire = 1;
+
+    auto xyzad = target_.get_recent_armor_xyzad();
+    Eigen::Vector4d target_armor_xyza = xyzad.head<4>();
+    double target_yaw = target_armor_xyza(3) ;
+    aim_target_yaw = atan2(target_armor_xyza(1), target_armor_xyza(0));//+ 0.3/57.3;
+    double shoot_range = target_.armor_type == ArmorType::big ? big_armor_tolerance : small_armor_tolerance;
+
+    if(target_.name == ArmorName::base || target_.name == ArmorName::outpost) 
+      shoot_range = tower_and_base_armor_tolerance_;
+
+      
+    // 打击范围计算
+    // 左边缘（沿切线正方向偏移半宽）
+    double left_x = target_armor_xyza(0) + 0.5 * shoot_range * (-sin(target_yaw));
+    double left_y = target_armor_xyza(1) + 0.5 * shoot_range * cos(target_yaw);
+
+    // 右边缘（沿切线负方向偏移半宽）
+    double right_x = target_armor_xyza(0) - 0.5 * shoot_range * (-sin(target_yaw));
+    double right_y = target_armor_xyza(1) - 0.5 * shoot_range * cos(target_yaw);
+
+
+    // 目标中心方向
+    double center_angle = atan2(target_armor_xyza(1), target_armor_xyza(0));
+    // 当前云台偏差（相对于中心）
+    double delta = tools::limit_rad(plan_yaw - center_angle);
+
+
+    double left_angle = atan2(left_y, left_x);
+    double right_angle = atan2(right_y, right_x);
+    // 计算左右边缘相对于中心的角度偏移
+    double d_left = tools::limit_rad(left_angle - center_angle);
+    double d_right = tools::limit_rad(right_angle - center_angle);
+
+    // 取较小的和较大的偏移（因为左右边缘距离中心不会超过 90°，所以 d_left 和 d_right 符号相反且绝对值 < π/2）
+    double d_min = std::min(d_left, d_right);
+    double d_max = std::max(d_left, d_right);
+
+
+    // pitch
+    bool suggest_pitch = true;
+    if(tower_fixed_pitch && abs(target_.ekf_x()(4) - target_armor_xyza(2)) > 0.001){
+      suggest_pitch = false;
+    }
+    // 判断 delta 是否在 [d_min, d_max] 范围内
+    suggest_fire = (delta >= d_min && delta <= d_max) && suggest_pitch;
+
+
+
+    if(!outpost_is_make && target_.name == ArmorName::outpost) suggest_fire = 0;
+    if(!suggest_fire){
+      // tools::logger()->info("not fire! control_delta_angle: {},  allow_fire_ang_max: {}, allow_fire_ang_min: {}",
+      //   control_delta_angle, allow_fire_ang_max, allow_fire_ang_min
+      // );
+    }
+      
+    return suggest_fire;
+  };
+  plan.fire = is_fire(plan.yaw - yaw_offset_, target, false);
   // tools::logger()->warn("fire:{}", plan.fire);
   plan.target_yaw = (aim_target_yaw + yaw_offset_ )* 57.3;
-
-
-
 
   return plan;
 }
@@ -478,7 +566,7 @@ Plan Planner::rbHeroplan(Target target, double bullet_speed, double gimbal_yaw){
     // tools::logger()->info("h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", xyz.z(), min_dist, xyz.norm(), bullet_traj.fly_time);
 
   auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, target_h);
-  is_far = target_h > 1.0;
+  is_far = min_dist > 5.0;
 //  tools::logger()->info("h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, is_far{} ", target_h, min_dist, xyz.norm(), bullet_traj.fly_time, is_far);
   
   target.predict(bullet_traj.fly_time );
@@ -650,50 +738,11 @@ Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_sp
 
 Eigen::Matrix<double, 2, 1> Planner::rbaim(const Target & target, double bullet_speed)
 {
-  auto armors = target.armor_xyza_list();
 
-  Eigen::Vector3d xyz;
-  double yaw;
-  auto min_dist = 1e10;
-
-  Eigen::VectorXd ekf_x = target.ekf_x();
-  // 如果delta_angle为0，则该装甲板中心和整车中心的连线在世界坐标系的xy平面过原点
-  static std::vector<std::pair<int ,double>> armorId_delta_list;  
-  if(!armorId_delta_list.empty()) armorId_delta_list.clear();
-  std::vector<Eigen::Vector4d> armor_xyza_list = target.armor_xyza_list();
-
-  auto armor_num = armor_xyza_list.size();
-  // // 如果装甲板未发生过跳变，则只有当前装甲板的位置已知
-  // if (!target.jumped) return {true, armor_xyza_list[0]};
-
-  // 整车旋转中心的球坐标yaw
-  auto center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
-
-  for (int i = 0; i < armor_num; i++) {
-    auto delta_angle = tools::limit_rad(armor_xyza_list[i][3] - center_yaw);
-    // auto dist = armor_xyza_list[i].head<2>().norm();
-    armorId_delta_list.emplace_back(std::make_pair(i, delta_angle));
-  }
-  
-  for (auto & xyza : target.armor_xyza_list()) {
-    auto dist = xyza.head<2>().norm();
-    if (dist < min_dist) {
-      min_dist = dist;
-      xyz = xyza.head<3>();
-      yaw = xyza[3];
-    }
-  }
-
-  double abs_vyaw = abs(ekf_x(7));
-  if(abs_vyaw < 90./57.3 
-    && armorId_delta_list[target.last_id].second < 60./57.3){// 判断当前看到的装甲板在预测时间之后是否还在视野内
-    min_dist = armor_xyza_list[target.last_id].head<2>().norm();
-    xyz = armor_xyza_list[target.last_id].head<3>();
-    yaw = armor_xyza_list[target.last_id](3);
-  }
-
-
-
+  Eigen::Matrix<double, 5, 1> xyzad = target.get_recent_armor_xyzad();
+  Eigen::Vector3d xyz = xyzad.head<3>();
+  double yaw = xyzad(3);
+  auto min_dist = xyz.head<2>().norm();
 
   debug_xyza = Eigen::Vector4d(xyz.x(), xyz.y(), xyz.z(), yaw);
 
@@ -701,7 +750,17 @@ Eigen::Matrix<double, 2, 1> Planner::rbaim(const Target & target, double bullet_
   auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
   if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
 
-  auto now_pitch_offset = is_far ? far_pitch_offset_ : pitch_offset_;
+  double now_pitch_offset = 0;
+  if(is_far & is_high) {now_pitch_offset = far_high_pitch_offset_;
+    // tools::logger()->info("far_high_pitch_offset_");
+  }
+  else if(is_far) {
+    now_pitch_offset = far_pitch_offset_;
+    // tools::logger()->info("far_pitch_offset_");
+  }
+  else {now_pitch_offset = pitch_offset_; 
+    // tools::logger()->info("pitch_offset_");
+  }
 
   return {tools::limit_rad(azim + yaw_offset_), bullet_traj.pitch + now_pitch_offset};
 
@@ -886,68 +945,7 @@ Trajectory Planner::rbget_trajectory(Target target, double yaw0, double bullet_s
 
   return traj;
 
-  
-  // Trajectory traj;
-    
-  // auto armors = target.armor_xyza_list();
-  // if (armors.empty()) throw std::runtime_error("无装甲板");
-  
-  // // 1. 调用 aim 确定本轮预测所锁定的装甲板
-  // this->rbaim(target, bullet_speed); 
-  // int locked_id = this->last_selected_idx;
-  
-  // // 2. 提取车辆中心状态与锁定装甲板的相对几何关系
-  // double center_x = target.ekf_x()(0);
-  // double center_y = target.ekf_x()(2);
-  // double center_z = target.ekf_x()(4);
-  
-  // double armor_x = armors[locked_id][0];
-  // double armor_y = armors[locked_id][1];
-  // double armor_z = armors[locked_id][2];
 
-  // // 计算装甲板相对于车辆中心的固联 Yaw 偏角和高度差
-  // double relative_angle = std::atan2(armor_y - center_y, armor_x - center_x) - target.ekf_x()(6);
-  // double z_offset = armor_z - center_z; // 保留装甲板的独立高度
-
-  // auto get_aim_for_locked = [&](Target& t) -> Eigen::Vector2d {
-  //     double c_x = t.ekf_x()(0);
-  //     double c_y = t.ekf_x()(2);
-  //     double c_z = t.ekf_x()(4);
-  //     double v_yaw = t.ekf_x()(6);
-  //     double r = t.ekf_x()(8); // 取出半径
-      
-  //     double pred_armor_x = c_x + r * std::cos(v_yaw + relative_angle);
-  //     double pred_armor_y = c_y + r * std::sin(v_yaw + relative_angle);
-  //     double pred_armor_z = c_z + z_offset; 
-      
-  //     auto azim = std::atan2(pred_armor_y, pred_armor_x);
-  //     double dist = std::hypot(pred_armor_x, pred_armor_y);
-  //     auto bullet_traj = tools::Trajectory(bullet_speed, dist, pred_armor_z);
-      
-  //     return {tools::limit_rad(azim + yaw_offset_), bullet_traj.pitch + pitch_offset_};
-  // };
-
-  // // 4. 生成轨迹
-  // target.predict(-DT * (HALF_HORIZON + 1));
-  // auto yaw_pitch_last = get_aim_for_locked(target);
-  
-  // target.predict(DT);
-  // auto yaw_pitch = get_aim_for_locked(target);
-
-  // for (int i = 0; i < HORIZON; i++) {
-  //   target.predict(DT);
-  //   auto yaw_pitch_next = get_aim_for_locked(target);
-
-  //   auto yaw_vel = tools::limit_rad(yaw_pitch_next(0) - yaw_pitch_last(0)) / (2 * DT);
-  //   auto pitch_vel = (yaw_pitch_next(1) - yaw_pitch_last(1)) / (2 * DT);
-
-  //   traj.col(i) << tools::limit_rad(yaw_pitch(0) - yaw0), yaw_vel, yaw_pitch(1), pitch_vel;
-
-  //   yaw_pitch_last = yaw_pitch;
-  //   yaw_pitch = yaw_pitch_next;
-  // }
-
-  // return traj;
 }
 
 }  // namespace auto_aim

@@ -1,5 +1,6 @@
 #include <fmt/core.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -15,7 +16,9 @@
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/exiter.hpp"
+#include "tools/systemd_watchdog.hpp"
 #include "tools/img_tools.hpp"
+#include "tools/reprojection.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
@@ -32,6 +35,23 @@
 using namespace std::chrono_literals;
 using namespace tools;
 
+namespace
+{
+void draw_buff_reprojection(
+  cv::Mat & img, const std::vector<cv::Point2f> & points, const cv::Scalar & color)
+{
+  if (points.size() >= 4) {
+    tools::draw_points(
+      img, std::vector<cv::Point2f>(points.begin(), points.begin() + 4), color);
+  }
+  if (points.size() >= 8) {
+    tools::draw_points(
+      img, std::vector<cv::Point2f>(points.begin() + 4, points.begin() + 8), color);
+  }
+  if (points.size() >= 9) tools::draw_point(img, points[8], color, 3);
+}
+}  // namespace
+
 
 const std::string keys =
   "{help h usage ? |                        | 输出命令行参数说明}"
@@ -39,6 +59,7 @@ const std::string keys =
 
 int main(int argc, char * argv[])
 {
+  tools::SystemdWatchdog systemd_watchdog;
   tools::Exiter exiter;
   tools::Plotter plotter;
 
@@ -157,6 +178,10 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point last_t;
   auto last_mode{io::GimbalMode::IDLE}; // 记录上次模式
 
+  if (!systemd_watchdog.ready("Vision pipeline is ready")) {
+    tools::logger()->warn("无法向 systemd 发送 READY 通知");
+  }
+
   while (!exiter.exit()) {
     mode = gimbal.mode(); // 每帧获取最新云台模式
     
@@ -173,8 +198,8 @@ int main(int argc, char * argv[])
       continue; // 跳过这一帧，不往下执行
     }
 
-
-    auto q = gimbal.q(t - 3ms);
+    systemd_watchdog.ping();
+    auto q = gimbal.q(t);
 
     double fps = 1./std::chrono::duration_cast<std::chrono::microseconds>(t - last_t).count()*1000000;
     // tools::draw_text(img, "fps: "+std::to_string(fps), cv::Point(40, 130));
@@ -199,63 +224,69 @@ int main(int argc, char * argv[])
       auto gs = gimbal.state();
       buff_solver.set_R_gimbal2world(q);
 
-      auto power_runes = buff_detector.detect_24(img);
-
-      buff_solver.solve(power_runes);
+      const auto buff_mode = mode.load() == io::GimbalMode::BIG_BUFF
+                               ? auto_buff::BuffMode::BIG
+                               : auto_buff::BuffMode::SMALL;
+      auto buff_observations = buff_detector.detect_tracks(img, buff_mode, t);
+      auto power_runes = buff_solver.solve_all(buff_observations);
 
       auto_aim::Plan buff_plan;
       auto_buff::Target* active_target = nullptr;
-      std::unique_ptr<auto_buff::Target> target_copy_ptr = nullptr;
 
       if (mode.load() == io::GimbalMode::SMALL_BUFF) {
         buff_small_target.get_target(power_runes, t);
         active_target = &buff_small_target;
         auto target_copy = buff_small_target;
         buff_plan = buff_aimer.mpc_aim(target_copy, t, gs, true);
-        target_copy_ptr = std::make_unique<auto_buff::SmallTarget>(target_copy);
       } else if (mode.load() == io::GimbalMode::BIG_BUFF) {
         buff_big_target.get_target(power_runes, t);
         active_target = &buff_big_target;
         auto target_copy = buff_big_target;
         buff_plan = buff_aimer.mpc_aim(target_copy, t, gs, true);
-        target_copy_ptr = std::make_unique<auto_buff::BigTarget>(target_copy);
       }
       
       // 直接发送打符相关的控制指令
       gimbal.send(
-        buff_plan.control, buff_plan.fire, buff_plan.yaw, buff_plan.yaw_vel, 0,
+        buff_plan.control, buff_plan.fire, buff_plan.yaw, buff_plan.yaw_vel, buff_plan.yaw_acc,
         buff_plan.pitch, buff_plan.pitch_vel, buff_plan.pitch_acc);
       
       auto fired = gs.bullet_count > last_bullet_count_main;
       last_bullet_count_main = gs.bullet_count;
 
       // ========================== 新增：打符图像调试重投影 ==========================
-      if (active_target && !active_target->is_unsolve() && power_runes.has_value()) {
-        auto & p = power_runes.value();
+      if (active_target && !active_target->is_unsolve()) {
+        const auto primary = std::find_if(
+          power_runes.begin(), power_runes.end(),
+          [](const auto_buff::PowerRune & rune) { return rune.primary; });
 
-        // 1. 显示识别的特征点和中心
-        for (int i = 0; i < 4; i++) tools::draw_point(img, p.target().points[i]);
-        tools::draw_point(img, p.target().center, {0, 0, 255}, 3);
-        tools::draw_point(img, p.r_center, {0, 0, 255}, 3);
+        // 1. 显示当前主轨的识别特征点和中心
+        if (primary != power_runes.end()) {
+          for (const auto & point : primary->target().points) tools::draw_point(img, point);
+          for (const auto & point : primary->target().fan_points) {
+            tools::draw_point(img, point, {0, 128, 255});
+          }
+          if (!primary->target().points.empty()) {
+            tools::draw_point(img, primary->target().center, {0, 0, 255}, 3);
+          }
+          if (!primary->target().fan_points.empty()) {
+            tools::draw_point(img, primary->target().fan_center, {0, 128, 255}, 3);
+          }
+          tools::draw_point(img, primary->r_center, {0, 0, 255}, 3);
+        }
 
         // 2. 当前帧target更新后buff位置 (绿色)
         auto Rxyz_in_world_now = active_target->point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.0));
         auto image_points_now =
-          buff_solver.reproject_buff(Rxyz_in_world_now, active_target->ekf_x()[4], active_target->ekf_x()[5]);
-        tools::draw_points(
-          img, std::vector<cv::Point2f>(image_points_now.begin(), image_points_now.begin() + 4), {0, 255, 0});
-        tools::draw_points(
-          img, std::vector<cv::Point2f>(image_points_now.begin() + 4, image_points_now.end()), {0, 255, 0});
+          buff_solver.reproject_buff(Rxyz_in_world_now, active_target->rotation_buff2world());
+        draw_buff_reprojection(img, image_points_now, {0, 255, 0});
 
-        // 3. buff瞄准预测位置 (红色)
-        if (target_copy_ptr) {
-          auto Rxyz_in_world_pre = active_target->point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.0));
+        // 3. Aimer弹道迭代最终使用的buff瞄准预测位置 (蓝色)
+        if (const auto * predicted_target = buff_aimer.predicted_target()) {
+          auto Rxyz_in_world_pre =
+            predicted_target->point_buff2world(Eigen::Vector3d(0.0, 0.0, 0.0));
           auto image_points_pre =
-            buff_solver.reproject_buff(Rxyz_in_world_pre, target_copy_ptr->ekf_x()[4], target_copy_ptr->ekf_x()[5]);
-          tools::draw_points(
-            img, std::vector<cv::Point2f>(image_points_pre.begin(), image_points_pre.begin() + 4), {255, 0, 0});
-          tools::draw_points(
-            img, std::vector<cv::Point2f>(image_points_pre.begin() + 4, image_points_pre.end()), {255, 0, 0});
+            buff_solver.reproject_buff(Rxyz_in_world_pre, predicted_target->rotation_buff2world());
+          draw_buff_reprojection(img, image_points_pre, {255, 0, 0});
         }
       }
       // =========================================================================
@@ -319,70 +350,12 @@ int main(int argc, char * argv[])
       auto targets = tracker.track(armors, t);
       // recor.record(img, q, t);
 
-      if (!targets.empty()){
-        target_queue.push(targets.front());
-
-        auto& target = targets.front();
-      
-        // 获取EKF状态向量
-        Eigen::VectorXd ekf_x = target.getEKFXest();
-        
-        // 1. 计算旋转中心的世界坐标
-        Eigen::Vector3d center_world(ekf_x[0], ekf_x[2], ekf_x[4]);
-        
-        // 2. 计算速度终点（预测0.5秒后的位置）
-        double dt = 0.5; // 预测时间
-        double scale_factor = 1.0; // 放大2倍
-        Eigen::Vector3d velocity(ekf_x[1], ekf_x[3], ekf_x[5]);
-        Eigen::Vector3d pred_center = center_world + velocity * dt * scale_factor ;
-        
-        // 3. 计算角速度方向终点
-        double w = ekf_x[7]; // 角速度
-        Eigen::Vector3d v_yaw_axis_tvec = center_world;
-        v_yaw_axis_tvec[2] += w * 0.1; // 在y方向加上角速度的影响
-
-        double speed_magnitude = std::sqrt(ekf_x[1]*ekf_x[1] + ekf_x[3]*ekf_x[3] + ekf_x[5]*ekf_x[5]);
-
-        auto center_img = solver.reproject_armor(center_world, 0.0, target.armor_type, target.name);
-        auto pred_point_img = solver.reproject_armor(pred_center, 0.0, target.armor_type, target.name);
-        auto v_yaw_axis_point_img = solver.reproject_armor(v_yaw_axis_tvec, 0.0, target.armor_type, target.name);
-        
-        // 5. 绘制速度和角速度方向
-        if (!center_img.empty() && !pred_point_img.empty()) {
-          // 绘制旋转中心
-          cv::circle(img, center_img[0], 5, cv::Scalar(51, 153, 237), -1);
-          
-          // 绘制预测点（速度方向）
-          cv::circle(img, pred_point_img[0], 8, cv::Scalar(0, 0, 255), -1);
-          
-          // 绘制速度方向线
-          cv::line(img, center_img[0], pred_point_img[0], cv::Scalar(0, 255, 255), 2);
-          
-          // 绘制角速度方向线
-          if (!v_yaw_axis_point_img.empty()) {
-            cv::line(img, center_img[0], v_yaw_axis_point_img[0], cv::Scalar(0, 255, 0), 2);
-          }
-        }
-      }
-      else {
-        target_queue.push(std::nullopt);
-      }
-
       if (!targets.empty()) {
-        auto target = targets.front();
-
-        // 当前帧target更新后
-        std::vector<Eigen::Vector4d> armor_xyza_list = target.armor_xyza_list();
-        for (const Eigen::Vector4d & xyza : armor_xyza_list) {
-          auto image_points =
-            solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
-          tools::draw_points(img, image_points, {235, 206, 135});
-        }
-
-        Eigen::Vector4d aim_xyza = planner.debug_xyza;
-        auto image_points =
-          solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
-        tools::draw_points(img, image_points, {0, 0, 255});
+        target_queue.push(targets.front());
+        tools::draw_reprojection(
+          img, solver, targets.front(), planner.debug_xyza, cv::Scalar(235, 206, 135));
+      } else {
+        target_queue.push(std::nullopt);
       }
 
     } 

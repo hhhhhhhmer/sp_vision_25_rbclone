@@ -1,0 +1,222 @@
+pattern_cols: 11      # 棋盘格每行的内角点数（格子数-1）
+pattern_rows: 8      # 棋盘格每列的内角点数（格子数-1）
+square_size_mm: 30   # 棋盘格方块大小（毫米）
+
+enemy_color: "auto"
+# enemy_color: "blue"
+# enemy_color: "red"
+
+
+#####-----神经网络参数-----#####
+yolo_name: yolov8
+classify_model: ../assets/tiny_resnet.onnx
+yolo11_model_path: ../assets/yolo11.xml
+yolov8_model_path: ../assets/yolov8.xml
+yolov5_model_path: ../assets/yolov5.xml
+device: CPU
+min_confidence: 0.5
+use_traditional: true
+
+#####-----ROI-----#####
+roi: 
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+use_roi: false
+
+# #####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+# min_confidence: 0.8
+
+number_classifier:
+  model_path: "../assets/rv_model/mlp.onnx"   # 模型路径 (确保文件存在)
+  label_path: "../assets/rv_model/label.txt"  # 标签文件路径
+  threshold: 0.5                 # 数字分类阈值
+  ignore_classes: ["negative"]   # 忽略的类别
+
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 11
+outpost_max_temp_lost_count: 75
+
+#####-----aimer参数-----##### 6mm
+# yaw_offset: 0.5 # degree -2.5
+# pitch_offset: 3.2 # degree 2
+# comming_angle: 60 # degree
+# leaving_angle: 20 # degree
+# decision_speed: 8 # rad/s
+# high_speed_delay_time: 0.12 # s
+# low_speed_delay_time: 0.093 # s
+
+#####-----aimer参数-----##### 12mm
+yaw_offset: 1.0 # degree 
+pitch_offset: 2.1 # degree 2
+comming_angle: 60 # degree
+leaving_angle: 20 # degree
+decision_speed: 8 # rad/
+
+high_speed_delay_time: 0.017 # s   远 0.25
+low_speed_delay_time: 0.017 # s    远 0.25
+far_pitch_offset: 1.6
+
+#####-----shooter参数-----#####
+first_tolerance: 3 # 近距离射击容差，degree
+second_tolerance: 2 # 远距离射击容差，degree
+judge_distance: 2 #距离判断阈值
+auto_fire: true # 是否由自瞄控制射击
+
+#12mm camera
+# camera_name: "hikrobot"
+# camera_sn: "DA7188471"
+# exposure_us: 6000
+# gain: 0.7
+# gamma: 0.5  
+# vid_pid: "2ba2:4d55"
+# flip: true
+# mirror: true
+# timestamp_offset_us: 1000 #us
+
+#6mm camera
+# camera_name: "hikrobot"
+# camera_sn: "DA7188471"
+# exposure_us: 9000
+# gain: 0.5
+# vid_pid: "2bdf:0001"
+# flip: true
+# mirror: true
+# timestamp_offset_us: 2000
+
+camera_name: "daheng"
+camera_sn: "FDN24040487"
+exposure_us: 12000
+gain: 0.7
+gamma: 1
+# img_gamma: 0.6
+img_gamma: 1
+vid_pid: "2ba2:4d55"
+flip: true
+mirror: true
+timestamp_offset_us: 2000
+
+# -1  0  0
+#  0 -1  0
+#  0  0  1
+# R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
+R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
+
+# # 6mm camera
+# # 重投影误差: 0.0787px
+# camera_matrix: [1809.564717217451, 0, 706.3327817682249, 0, 1805.15500074533, 538.4969433458281, 0, 0, 1]
+# distort_coeffs: [-0.07041439840690113, 0.151412749802884, 0.0007210441135535533, -0.0006368697407199156, -0.03172837319091361]
+# # 相机同理想情况的偏角: yaw-1.74 pitch-1.63 roll1.35 degree
+# # 标定板到世界坐标系原点的水平距离: 2.17 m
+# # 标定板同竖直摆放时的偏角: yaw-0.69 pitch16.89 roll-2.66 degree
+# R_camera2gimbal: [0.029716925347032186, -0.02905823526614317, 0.9991358883110625, -0.9992825867505816, 0.02261477470051248, 0.030379002325802554, -0.023477993206084943, -0.9993218655310523, -0.028365346931643467]
+# t_camera2gimbal: [0.09950350840289986, -0.0178102433697989, 0.042332935712018425]
+# # _camera2gimbal第一位调yaw
+# # _camera2gimbal第二位调yaw
+# # _camera2gimbal第三位调pitch
+
+# #12mm camera
+# 重投影误差: 0.0678px
+camera_matrix: [3506.43260245539, 0, 626.8725236943991, 0, 3509.1343359880334, 515.2138802883584, 0, 0, 1]
+distort_coeffs: [-0.03203195932598012, 0.6194641635984389, -0.0017710401699976882, -0.004809865733633829, -4.57650550814562]
+# 相机同理想情况的偏角: yaw0.00 pitch-1.39 roll-4.74 degree
+# 标定板到世界坐标系原点的水平距离: 3.58 m
+# 标定板同竖直摆放时的偏角: yaw65.13 pitch15.77 roll-1.36 degree
+R_camera2gimbal: [0.0019488383507866205, -0.02426235032596476, 0.9997037263038201, -0.9965822168407157, -0.08260678678819822, -6.207554781840173e-05, 0.08258381866883473, -0.9962868347685769, -0.02434041414774406]
+t_camera2gimbal: [0.17071487789455797, 0.0037105887116622837, 0.04089356052156286]
+gimbal_y1: 1
+gimbal_p2: 2
+gimbal_r3: 3
+#####-----cboard参数-----#####
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xff
+can_interface: "can0"
+
+#####-----gimbal参数-----#####
+com_port: "/dev/ttyACM1"
+
+
+#####-----planner-----#####
+target_dist_error: 0.0
+target_h_error: 0.4
+fire_thresh: 0.003 # 
+small_armor_tolerance: 0.12
+big_armor_tolerance: 0.22
+tower_and_base_armor_tolerance_: 0.10  # 26赛季前哨站和基地装甲板检测宽度
+gimbal_control_delay: 0.0 
+tower_pitch_prediction_time: 0.3
+gimbal_delay: 0.001
+shoot_offset: 2
+max_yaw_acc: 50
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+
+max_pitch_acc: 100
+Q_pitch: [9e6,0]
+R_pitch: [1]
+
+#####-----buff_detector参数-----#####
+detect:
+  contrast: 1
+  brightness: 
+    blue: -120
+    red: -100
+  brightness_threshold:
+    blue: 120
+    red: 40
+  morphology_size:
+    blue: 3
+    red: 3
+  dilate_size: 2
+  # canny_low_threshold: 100
+  # canny_high_threshold: 180
+  # approx_epsilon: 1.0
+  R_contours_min_area: 200
+  R_contours_max_area: 600
+  fanblades_head_contours_min_area: 3000
+  fanblades_head_contours_max_area: 8000
+  fanblades_body_contours_min_area: 1000
+  fanblades_body_contours_max_area: 4000
+  standard_fanblade_path: ./assets/standard_fanblade.jpg
+
+model: "/home/cyn/Desktop/sp_vision_25_rbclone/yolo_buff/runs/pose/runs/rune_pose/yolo11n_rune/weights/best.onnx"
+buff_confidence_threshold: 0.7
+buff_keypoint_threshold: 0.3
+buff_rune_radius_m: 0.700
+buff_locked_gate_deg: 25
+buff_switch_gate_deg: 10
+buff_switch_confirm_frames: 3
+buff_locked_lost_max: 6
+#####-----buff_aimer参数-----#####
+aim_time: 0.150         # s
+wait_time: 0.300        # s
+command_fire_gap: 0.080 # s
+fire_gap_time: 0.700   # s
+predict_time: 0.120    # s
+
+
+
+# auto q = gimbal.q(t - 1ms);
+
+# float yaw = ypr[0];
+# float pitch = ypr[1];
+# float roll = ypr[2];
+
+# Eigen::Quaterniond q = 
+#     Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *   // 绕Z轴旋转yaw
+#     Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) * // 绕Y轴旋转pitch
+#     Eigen::AngleAxisd(-roll, Eigen::Vector3d::UnitX());   // 绕X轴旋转roll

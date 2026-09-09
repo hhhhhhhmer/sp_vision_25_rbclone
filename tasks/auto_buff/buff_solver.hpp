@@ -6,6 +6,8 @@
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
 #include <opencv2/core/eigen.hpp>
 #include <optional>
+#include <unordered_map>
+#include <vector>
 
 #include "buff_type.hpp"
 #include "tools/math_tools.hpp"
@@ -23,13 +25,20 @@ public:
 
   void set_R_gimbal2world(const Eigen::Quaterniond & q);
 
-  void solve(std::optional<PowerRune> & ps) const;
+  std::optional<PowerRune> solve(const BuffObservation & observation) const;
+
+  std::optional<PowerRune> solve(
+    const std::optional<BuffObservation> & observation) const;
+
+  std::vector<PowerRune> solve_all(const std::vector<BuffObservation> & observations) const;
 
   // 调试用
   cv::Point2f point_buff2pixel(cv::Point3f x);
 
+  std::optional<std::vector<cv::Point2f>> reproject_pnp_points() const;
+
   std::vector<cv::Point2f> reproject_buff(
-    const Eigen::Vector3d & xyz_in_world, double yaw, double row) const;
+    const Eigen::Vector3d & xyz_in_world, const Eigen::Matrix3d & R_buff2world) const;
 
 private:
   cv::Mat camera_matrix_;
@@ -39,23 +48,28 @@ private:
   Eigen::Vector3d t_camera2gimbal_;
   Eigen::Matrix3d R_gimbal2world_;
 
-  cv::Vec3d rvec_, tvec_;
+  mutable cv::Vec3d rvec_, tvec_;
+  mutable bool has_pnp_solution_ = false;
+  struct PoseCache
+  {
+    cv::Vec3d rvec;
+    cv::Vec3d tvec;
+  };
+  mutable std::unordered_map<int, PoseCache> pose_cache_;
 
-  // std::vector<std::vector<cv::Point3f>> OBJECT_POINTS = {
-  //   {cv::Point3f(0, 160e-3, 858.5e-3), cv::Point3f(0, -160e-3, 858.5e-3),
-  //    cv::Point3f(0, -186e-3, 541.5e-3), cv::Point3f(0, 186e-3, 541.5e-3),
-  //    cv::Point3f(0, 0, 700e-3)},
-  //   {},
-  //   {},
-  //   {},
-  //   {}};  // 单位：米
+  double full_reprojection_gate_px_ = 6.0;
+  double target_center_reprojection_gate_px_ = 6.0;
+  double fan_center_reprojection_gate_px_ = 8.0;
+  double partial_four_center_gate_px_ = 8.0;
+  double partial_four_angle_gate_rad_ = 15.0 / 57.3;
 
-  // TODO
-  const std::vector<cv::Point3f> OBJECT_POINTS = {
-    cv::Point3f(0, 0, 827e-3), cv::Point3f(0, 127e-3, 700e-3),
-    cv::Point3f(0, 0, 573e-3), cv::Point3f(0, -127e-3, 700e-3),
-    cv::Point3f(0, 0, 700e-3), cv::Point3f(0, 0, 220e-3),
-    cv::Point3f(0, 0, 0)};  // 单位：米
+  const std::vector<cv::Point3f> PNP_OBJECT_POINTS = {
+    cv::Point3f(0.0f, -0.095f, 0.0f), cv::Point3f(0.095f, 0.0f, 0.0f),
+    cv::Point3f(0.0f, 0.095f, 0.0f), cv::Point3f(-0.095f, 0.0f, 0.0f),
+    cv::Point3f(-0.030f, 0.191f, 0.0f), cv::Point3f(0.030f, 0.191f, 0.0f),
+    cv::Point3f(0.030f, 0.521f, 0.0f), cv::Point3f(-0.030f, 0.521f, 0.0f)};
+
+  std::vector<cv::Point3f> reproject_object_points() const;
 
   // 函数：生成绕x轴旋转的旋转矩阵
   cv::Matx33f rotation_matrix(double angle) const;

@@ -15,6 +15,7 @@
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/exiter.hpp"
+#include "tools/systemd_watchdog.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
@@ -36,6 +37,7 @@ const std::string keys =
 
 int main(int argc, char * argv[])
 {
+  tools::SystemdWatchdog systemd_watchdog;
   tools::Exiter exiter;
   tools::Plotter plotter;
 
@@ -151,6 +153,10 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point t;
   auto last_mode{io::GimbalMode::IDLE}; // 记录上次模式
 
+  if (!systemd_watchdog.ready("Vision pipeline is ready")) {
+    tools::logger()->warn("无法向 systemd 发送 READY 通知");
+  }
+
   while (!exiter.exit()) {
     mode = gimbal.mode(); // 每帧获取最新云台模式
     
@@ -167,6 +173,7 @@ int main(int argc, char * argv[])
       continue; 
     }
 
+    systemd_watchdog.ping();
     auto q = gimbal.q(t);
 
     // 如果是打符模式
@@ -174,9 +181,11 @@ int main(int argc, char * argv[])
       auto gs = gimbal.state();
       buff_solver.set_R_gimbal2world(q);
 
-      auto power_runes = buff_detector.detect_24(img);
-
-      buff_solver.solve(power_runes);
+      const auto buff_mode = mode.load() == io::GimbalMode::BIG_BUFF
+                               ? auto_buff::BuffMode::BIG
+                               : auto_buff::BuffMode::SMALL;
+      auto buff_observations = buff_detector.detect_tracks(img, buff_mode, t);
+      auto power_runes = buff_solver.solve_all(buff_observations);
 
       auto_aim::Plan buff_plan;
       auto_buff::Target* active_target = nullptr;
@@ -198,7 +207,7 @@ int main(int argc, char * argv[])
       
       // 直接发送打符相关的控制指令
       gimbal.send(
-        buff_plan.control, buff_plan.fire, buff_plan.yaw, buff_plan.yaw_vel, 0,
+        buff_plan.control, buff_plan.fire, buff_plan.yaw, buff_plan.yaw_vel, buff_plan.yaw_acc,
         buff_plan.pitch, buff_plan.pitch_vel, buff_plan.pitch_acc);
       
       auto fired = gs.bullet_count > last_bullet_count_main;

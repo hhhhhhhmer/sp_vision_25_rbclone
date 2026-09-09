@@ -145,7 +145,14 @@ Q_pitch: [9e6, 0]
 R_pitch: [1]
 
 #####-----buff_detector参数-----#####
-model: "assets/yolo11_buff_int8.xml"
+model: "/home/cyn/Desktop/sp_vision_25_rbclone/yolo_buff/runs/pose/runs/rune_pose/yolo11n_rune/weights/best.onnx"
+buff_confidence_threshold: 0.7
+buff_keypoint_threshold: 0.3
+buff_rune_radius_m: 0.700
+buff_locked_gate_deg: 25
+buff_switch_gate_deg: 10
+buff_switch_confirm_frames: 3
+buff_locked_lost_max: 6
 
 #####-----buff_aimer参数-----#####
 fire_gap_time: 0.700   # s
@@ -155,6 +162,5 @@ predict_time: 0.120    # s
 
 
 main_and_secondary: right
-
 
 

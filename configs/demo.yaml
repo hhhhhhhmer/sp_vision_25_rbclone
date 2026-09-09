@@ -45,6 +45,8 @@ leaving_angle: 20 # degree
 decision_speed: 8 # rad/s
 high_speed_delay_time: 0.030 # s
 low_speed_delay_time: 0.015 # s
+shoot_offset: 2
+
 
 #####-----shooter参数-----#####
 first_tolerance: 3 # 近距离射击容差，degree
@@ -76,15 +78,14 @@ timestamp_offset_us: 1000 #us
 # R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
 R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
 
-# 重投影误差: 0.1164px
-camera_matrix: [3564.8174968431526, 0, 708.9912310363035, 0, 3564.8889674382763, 515.3306880094015, 0, 0, 1]
-distort_coeffs: [-0.012799652349955518, 0.06769407527114184, 0.000712447471914966, -0.0016254748233795065, 2.541863970933887]
-
-# 相机同理想情况的偏角: yaw-0.60 pitch-0.35 roll-1.53 degree
-# 标定板到世界坐标系原点的水平距离: 3.23 m
-# 标定板同竖直摆放时的偏角: yaw37.61 pitch3.23 roll-0.06 degree
-R_camera2gimbal: [0.010630568168778162, -0.005789248980673708, 0.9999267351244534, -0.9995886616740502, -0.02669899594545312, 0.010472395532356843, 0.02663641254167717, -0.9996267544497518, -0.006070693137125566]
-t_camera2gimbal: [0.115368524404037, -0.047768060813373876, 0.05836069500887165]
+# 相机同理想情况的偏角: yaw-1.28 pitch-0.86 roll1.69 degree
+# 标定板到世界坐标系原点的水平距离: 2.32 m
+# 标定板同竖直摆放时的偏角: yaw33.35 pitch3.18 roll178.77 degree
+R_camera2gimbal: [0.021855625413864842, -0.015647731914552505, 0.9996386747838935, -0.9993256618827006, 0.029166648211860085, 0.022305338705964458, -0.029505137526726087, -0.9994520774494474, -0.01499972471457684]
+t_camera2gimbal: [0.17084305749157316, -0.04075354126954691, 0.029940249686494804]
+# 重投影误差: 0.0855px
+camera_matrix: [2368.6535582332217, 0, 709.5986018632645, 0, 2367.2059390988875, 557.3218862700319, 0, 0, 1]
+distort_coeffs: [-0.03490547533857166, 0.23879749900556682, 0.0018315902205457042, 0.00031464218053409257, -0.30716218266668555]
 #####-----cboard参数-----#####
 quaternion_canid: 0x100
 bullet_speed_canid: 0x101
@@ -147,7 +148,14 @@ detect:
   fanblades_body_contours_max_area: 4000
   standard_fanblade_path: ./assets/standard_fanblade.jpg
 
-model: "../assets/yolo11_buff_int8.xml"
+model: "/home/cyn/Desktop/sp_vision_25_rbclone/yolo_buff/runs/pose/runs/rune_pose/yolo11n_rune/weights/best.onnx"
+buff_confidence_threshold: 0.6
+buff_keypoint_threshold: 0.3
+buff_rune_radius_m: 0.700
+buff_locked_gate_deg: 25
+buff_switch_gate_deg: 10
+buff_switch_confirm_frames: 3
+buff_locked_lost_max: 6
 #####-----buff_aimer参数-----#####
 aim_time: 0.150         # s
 wait_time: 0.300        # s

@@ -1,4 +1,4 @@
-#include "yolov5.hpp"
+#include "yolo11.hpp"
 
 #include <fmt/chrono.h>
 #include <yaml-cpp/yaml.h>
@@ -10,12 +10,12 @@
 
 namespace auto_aim
 {
-YOLOV5::YOLOV5(const std::string & config_path, bool debug)
+YOLO11::YOLO11(const std::string & config_path, bool debug)
 : debug_(debug), detector_(config_path, false)
 {
   auto yaml = YAML::LoadFile(config_path);
 
-  model_path_ = yaml["yolov5_model_path"].as<std::string>();
+  model_path_ = yaml["yolo11_model_path"].as<std::string>();
   device_ = yaml["device"].as<std::string>();
   binary_threshold_ = yaml["threshold"].as<double>();
   min_confidence_ = yaml["min_confidence"].as<double>();
@@ -25,7 +25,6 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug)
   width = yaml["roi"]["width"].as<int>();
   height = yaml["roi"]["height"].as<int>();
   use_roi_ = yaml["use_roi"].as<bool>();
-  use_traditional_ = yaml["use_traditional"].as<bool>();
   roi_ = cv::Rect(x, y, width, height);
   offset_ = cv::Point2f(x, y);
 
@@ -52,9 +51,10 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug)
   model = ppp.build();
   compiled_model_ = core_.compile_model(
     model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+  async_pipeline_.init(compiled_model_, 640, 640);
 }
 
-std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
+std::list<Armor> YOLO11::detect(const cv::Mat & raw_img, int frame_count)
 {
   if (raw_img.empty()) {
     tools::logger()->warn("Empty img!, camera drop!");
@@ -62,6 +62,7 @@ std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
   }
 
   cv::Mat bgr_img;
+  tmp_img_ = raw_img;
   if (use_roi_) {
     if (roi_.width == -1) {  // -1 表示该维度不裁切
       roi_.width = raw_img.cols;
@@ -86,7 +87,7 @@ std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
   cv::resize(bgr_img, input(roi), {w, h});
   ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input.data);
 
-  // infer
+  /// infer
   auto infer_request = compiled_model_.create_infer_request();
   infer_request.set_input_tensor(input_tensor);
   infer_request.infer();
@@ -99,60 +100,73 @@ std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
   return parse(scale, output, raw_img, frame_count);
 }
 
-std::list<Armor> YOLOV5::parse(
-  double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
+YOLOFrameData YOLO11::detect(YOLOFrameData frame_data, int frame_count)
 {
-  // for each row: xywh + classess
-  std::vector<int> color_ids, num_ids;
+  if (frame_data.frame.empty()) {
+    tools::logger()->warn("Empty img!, camera drop!");
+    return YOLOFrameData();
+  }
+
+  cv::Mat bgr_img;
+  if (use_roi_) {
+    if (roi_.width == -1) {
+      roi_.width = frame_data.frame.cols;
+    }
+    if (roi_.height == -1) {
+      roi_.height = frame_data.frame.rows;
+    }
+    bgr_img = frame_data.frame(roi_);
+  } else {
+    bgr_img = frame_data.frame;
+  }
+
+  return async_pipeline_.detect(
+    bgr_img, frame_data, frame_count,
+    [this](double scale, cv::Mat & output, const cv::Mat & img, int finished_frame_count) {
+      return parse(scale, output, img, finished_frame_count);
+    });
+}
+
+std::list<Armor> YOLO11::parse(
+  double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
+{  // for each row: xywh + classess
+  cv::transpose(output, output);
+
+  std::vector<int> ids;
   std::vector<float> confidences;
   std::vector<cv::Rect> boxes;
   std::vector<std::vector<cv::Point2f>> armors_key_points;
   for (int r = 0; r < output.rows; r++) {
-    double score = output.at<float>(r, 8);
-    score = sigmoid(score);
-
-    if (score < score_threshold_) continue;
+    auto xywh = output.row(r).colRange(0, 4);
+    auto scores = output.row(r).colRange(4, 4 + class_num_);
+    auto one_key_points = output.row(r).colRange(4 + class_num_, 50);
 
     std::vector<cv::Point2f> armor_key_points;
 
-    //颜色和类别独热向量
-    cv::Mat color_scores = output.row(r).colRange(9, 13);     //color
-    cv::Mat classes_scores = output.row(r).colRange(13, 22);  //num
-    cv::Point class_id, color_id;
-    int _class_id, _color_id;
-    double score_color, score_num;
-    cv::minMaxLoc(classes_scores, NULL, &score_num, NULL, &class_id);
-    cv::minMaxLoc(color_scores, NULL, &score_color, NULL, &color_id);
-    _class_id = class_id.x;
-    _color_id = color_id.x;
+    double score;
+    cv::Point max_point;
+    cv::minMaxLoc(scores, nullptr, &score, nullptr, &max_point);
 
-    armor_key_points.push_back(
-      cv::Point2f(output.at<float>(r, 0) / scale, output.at<float>(r, 1) / scale));
-    armor_key_points.push_back(
-      cv::Point2f(output.at<float>(r, 6) / scale, output.at<float>(r, 7) / scale));
-    armor_key_points.push_back(
-      cv::Point2f(output.at<float>(r, 4) / scale, output.at<float>(r, 5) / scale));
-    armor_key_points.push_back(
-      cv::Point2f(output.at<float>(r, 2) / scale, output.at<float>(r, 3) / scale));
+    if (score < score_threshold_) continue;
 
-    float min_x = armor_key_points[0].x;
-    float max_x = armor_key_points[0].x;
-    float min_y = armor_key_points[0].y;
-    float max_y = armor_key_points[0].y;
+    auto x = xywh.at<float>(0);
+    auto y = xywh.at<float>(1);
+    auto w = xywh.at<float>(2);
+    auto h = xywh.at<float>(3);
+    auto left = static_cast<int>((x - 0.5 * w) / scale);
+    auto top = static_cast<int>((y - 0.5 * h) / scale);
+    auto width = static_cast<int>(w / scale);
+    auto height = static_cast<int>(h / scale);
 
-    for (int i = 1; i < armor_key_points.size(); i++) {
-      if (armor_key_points[i].x < min_x) min_x = armor_key_points[i].x;
-      if (armor_key_points[i].x > max_x) max_x = armor_key_points[i].x;
-      if (armor_key_points[i].y < min_y) min_y = armor_key_points[i].y;
-      if (armor_key_points[i].y > max_y) max_y = armor_key_points[i].y;
+    for (int i = 0; i < 4; i++) {
+      float x = one_key_points.at<float>(0, i * 2 + 0) / scale;
+      float y = one_key_points.at<float>(0, i * 2 + 1) / scale;
+      cv::Point2f kp = {x, y};
+      armor_key_points.push_back(kp);
     }
-
-    cv::Rect rect(min_x, min_y, max_x - min_x, max_y - min_y);
-
-    color_ids.emplace_back(_color_id);
-    num_ids.emplace_back(_class_id);
-    boxes.emplace_back(rect);
+    ids.emplace_back(max_point.x);
     confidences.emplace_back(score);
+    boxes.emplace_back(left, top, width, height);
     armors_key_points.emplace_back(armor_key_points);
   }
 
@@ -161,15 +175,14 @@ std::list<Armor> YOLOV5::parse(
 
   std::list<Armor> armors;
   for (const auto & i : indices) {
+    sort_keypoints(armors_key_points[i]);
     if (use_roi_) {
-      armors.emplace_back(
-        color_ids[i], num_ids[i], confidences[i], boxes[i], armors_key_points[i], offset_);
+      armors.emplace_back(ids[i], confidences[i], boxes[i], armors_key_points[i], offset_);
     } else {
-      armors.emplace_back(color_ids[i], num_ids[i], confidences[i], boxes[i], armors_key_points[i]);
+      armors.emplace_back(ids[i], confidences[i], boxes[i], armors_key_points[i]);
     }
   }
 
-  tmp_img_ = bgr_img;
   for (auto it = armors.begin(); it != armors.end();) {
     if (!check_name(*it)) {
       it = armors.erase(it);
@@ -180,8 +193,6 @@ std::list<Armor> YOLOV5::parse(
       it = armors.erase(it);
       continue;
     }
-    // 使用传统方法二次矫正角点
-    if (use_traditional_) detector_.detect(*it, bgr_img);
 
     it->center_norm = get_center_norm(bgr_img, it->center);
     ++it;
@@ -192,7 +203,7 @@ std::list<Armor> YOLOV5::parse(
   return armors;
 }
 
-bool YOLOV5::check_name(const Armor & armor) const
+bool YOLO11::check_name(const Armor & armor) const
 {
   auto name_ok = armor.name != ArmorName::not_armor;
   auto confidence_ok = armor.confidence > min_confidence_;
@@ -203,7 +214,7 @@ bool YOLOV5::check_name(const Armor & armor) const
   return name_ok && confidence_ok;
 }
 
-bool YOLOV5::check_type(const Armor & armor) const
+bool YOLO11::check_type(const Armor & armor) const
 {
   auto name_ok = (armor.type == ArmorType::small)
                    ? (armor.name != ArmorName::one && armor.name != ArmorName::base)
@@ -216,14 +227,42 @@ bool YOLOV5::check_type(const Armor & armor) const
   return name_ok;
 }
 
-cv::Point2f YOLOV5::get_center_norm(const cv::Mat & bgr_img, const cv::Point2f & center) const
+cv::Point2f YOLO11::get_center_norm(const cv::Mat & bgr_img, const cv::Point2f & center) const
 {
   auto h = bgr_img.rows;
   auto w = bgr_img.cols;
   return {center.x / w, center.y / h};
 }
 
-void YOLOV5::draw_detections(
+void YOLO11::sort_keypoints(std::vector<cv::Point2f> & keypoints)
+{
+  if (keypoints.size() != 4) {
+    std::cout << "beyond 4!!" << std::endl;
+    return;
+  }
+
+  std::sort(keypoints.begin(), keypoints.end(), [](const cv::Point2f & a, const cv::Point2f & b) {
+    return a.y < b.y;
+  });
+
+  std::vector<cv::Point2f> top_points = {keypoints[0], keypoints[1]};
+  std::vector<cv::Point2f> bottom_points = {keypoints[2], keypoints[3]};
+
+  std::sort(top_points.begin(), top_points.end(), [](const cv::Point2f & a, const cv::Point2f & b) {
+    return a.x < b.x;
+  });
+
+  std::sort(
+    bottom_points.begin(), bottom_points.end(),
+    [](const cv::Point2f & a, const cv::Point2f & b) { return a.x < b.x; });
+
+  keypoints[0] = top_points[0];     // top-left
+  keypoints[1] = top_points[1];     // top-right
+  keypoints[2] = bottom_points[1];  // bottom-right
+  keypoints[3] = bottom_points[0];  // bottom-left
+}
+
+void YOLO11::draw_detections(
   const cv::Mat & img, const std::list<Armor> & armors, int frame_count) const
 {
   auto detection = img.clone();
@@ -244,22 +283,14 @@ void YOLOV5::draw_detections(
   cv::imshow("detection", detection);
 }
 
-void YOLOV5::save(const Armor & armor) const
+void YOLO11::save(const Armor & armor) const
 {
   auto file_name = fmt::format("{:%Y-%m-%d_%H-%M-%S}", std::chrono::system_clock::now());
   auto img_path = fmt::format("{}/{}_{}.jpg", save_path_, armor.name, file_name);
   cv::imwrite(img_path, tmp_img_);
 }
 
-double YOLOV5::sigmoid(double x)
-{
-  if (x > 0)
-    return 1.0 / (1.0 + exp(-x));
-  else
-    return exp(x) / (1.0 + exp(x));
-}
-
-std::list<Armor> YOLOV5::postprocess(
+std::list<Armor> YOLO11::postprocess(
   double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
 {
   return parse(scale, output, bgr_img, frame_count);

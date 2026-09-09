@@ -25,8 +25,9 @@ public:
   Decider(const std::string & config_path);
 
   io::VisionToGimbal decide_g(
-  auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos, io::Camera & omn_cam1_l,
-  io::Camera & omn_cam2_r, const auto_aim::Solver & left_solver, const auto_aim::Solver & right_solver);
+    auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos, io::Camera & omn_cam1_l,
+    io::Camera & omn_cam2_r, const auto_aim::Solver & left_solver,
+    const auto_aim::Solver & right_solver, float * target_distance = nullptr);
   
   io::Command decide(
   auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos, io::USBCamera & usbcam1,

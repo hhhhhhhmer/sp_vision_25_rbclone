@@ -1,16 +1,21 @@
-﻿#ifndef AUTO_BUFF__YOLO11_BUFF_HPP
+#ifndef AUTO_BUFF__YOLO11_BUFF_HPP
 #define AUTO_BUFF__YOLO11_BUFF_HPP
 #include <yaml-cpp/yaml.h>
 
-#include <filesystem>
+#include <memory>
 #include <opencv2/opencv.hpp>
-#include <openvino/openvino.hpp>
-
-#include "tools/logger.hpp"
 
 namespace auto_buff
 {
-const std::vector<std::string> class_names = {"buff", "r"};
+inline const std::vector<std::string> class_names = {
+  "inactive_target", "inactive_fan", "rune_center"};
+
+enum RuneClass : int
+{
+  INACTIVE_TARGET = 0,
+  INACTIVE_FAN = 1,
+  RUNE_CENTER = 2
+};
 
 class YOLO11_BUFF
 {
@@ -21,9 +26,16 @@ public:
     int label;
     float prob;
     std::vector<cv::Point2f> kpt;
+    std::vector<float> kpt_conf;
   };
 
   YOLO11_BUFF(const std::string & config);
+  ~YOLO11_BUFF();
+
+  YOLO11_BUFF(const YOLO11_BUFF &) = delete;
+  YOLO11_BUFF & operator=(const YOLO11_BUFF &) = delete;
+  YOLO11_BUFF(YOLO11_BUFF &&) = delete;
+  YOLO11_BUFF & operator=(YOLO11_BUFF &&) = delete;
 
   // 使用NMS，用来获取多个框
   std::vector<Object> get_multicandidateboxes(cv::Mat & image);
@@ -32,25 +44,22 @@ public:
   std::vector<Object> get_onecandidatebox(cv::Mat & image);
 
 private:
-  ov::Core core;  // 创建OpenVINO Runtime Core对象
-  std::shared_ptr<ov::Model> model;
-  ov::CompiledModel compiled_model;
-  ov::InferRequest infer_request;
-  ov::Tensor input_tensor;
-  const int NUM_POINTS = 6;
+  struct Backend;
+  std::unique_ptr<Backend> backend_;
 
-  // 转换图像数据: 先转换元素类型, (可选)然后归一化到[0, 1], (可选)然后交换RB通道
-  void convert(
-    const cv::Mat & input, cv::Mat & output, const bool normalize, const bool exchangeRB) const;
+  static constexpr int NUM_CLASSES = 3;
+  static constexpr int NUM_POINTS = 4;
+  static constexpr int KPT_DIMS = 3;
 
-  // 对网络的输入为图片数据的节点进行赋值，实现图片数据输入网络,return 缩放因子, 该缩放是为了将input_image塞进input_tensor
-  float fill_tensor_data_image(ov::Tensor & input_tensor, const cv::Mat & input_image) const;
+  float confidence_threshold_ = 0.7f;
+  float keypoint_threshold_ = 0.3f;
+  float iou_threshold_ = 0.4f;
 
-  // 打印模型信息, 这个函数修改自$${OPENVINO_COMMON}/utils/src/args_helper.cpp的同名函数
-  void printInputAndOutputsInfo(const ov::Model & network);
-
-  // 将image保存为"../result/$${programName}.jpg"
-  void save(const std::string & programName, const cv::Mat & image);
+  std::vector<Object> infer_and_decode(cv::Mat & image);
+  std::vector<Object> decode(
+    const float * output, int output_rows, int output_cols, float inverse_scale,
+    const cv::Size & image_size) const;
+  void draw_objects(cv::Mat & image, const std::vector<Object> & objects, double elapsed_s) const;
 };
 }  // namespace auto_buff
 #endif

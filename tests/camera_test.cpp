@@ -9,7 +9,7 @@
 
 const std::string keys =
   "{help h usage ? |                     | 输出命令行参数说明}"
-  "{config-path c  | /home/rm/sp_vision_25_rbclone/configs/camera.yaml | yaml配置文件路径 }"
+  "{config-path c  | ../configs/sb_short.yaml | yaml配置文件路径 }"
   "{d display      |        1             | 显示视频流       }";
 
 int main(int argc, char * argv[])
@@ -44,7 +44,7 @@ int main(int argc, char * argv[])
     tools::logger()->info("{:.2f} fps", 1 / dt);
 
     if (!display) continue;
-    // cv::imshow("img", img);
-    // if (cv::waitKey(1) == 'q') break;
+    cv::imshow("img", img);
+    if (cv::waitKey(1) == 'q') break;
   }
 }

@@ -5,6 +5,7 @@
 #include <tuple>
 
 #include "tools/logger.hpp"
+#include "tools/fft.hpp"
 #include "tools/math_tools.hpp"
 
 
@@ -31,6 +32,34 @@ Tracker::Tracker(const std::string & config_path, Solver * solver)
 }
 
 std::string Tracker::state() const { return state_; }
+
+void Tracker::reset()
+{
+  detect_count_ = 0;
+  temp_lost_count_ = 0;
+  state_ = "lost";
+  pre_state_ = "lost";
+  last_timestamp_ = std::chrono::steady_clock::now();
+  last_mode_.reset();
+}
+
+void Tracker::set_fft(tools::FFTExample * fft)
+{
+  fft_ = fft;
+  reset_fft_sample_state();
+}
+
+void Tracker::reset_fft_sample_state()
+{
+  if (fft_) fft_->reset();
+}
+
+void Tracker::update_fft_sample(
+  const Armor & armor, std::chrono::steady_clock::time_point t)
+{
+  if (!fft_) return;
+  fft_->add_sample(t, target_.last_id, armor.xyz_in_world.z());
+}
 
 std::list<Target> Tracker::sb_track(
   std::list<Armor> & armors, std::chrono::steady_clock::time_point t,bool cam_is_short, bool use_enemy_color)
@@ -151,8 +180,8 @@ std::list<Target> Tracker::track(
 
   bool found = 0;
 
-  static uint8_t last_mode = g.mode;
-  bool mode_switch_0to1 = (last_mode == 0 && g.mode == 1);
+  if (!last_mode_.has_value()) last_mode_ = g.mode;
+  bool mode_switch_0to1 = (*last_mode_ == 0 && g.mode == 1);
   //按下右键时，mouse为1则跟随上一次的目标，不按则瞄准最近的装甲板
   if(!mode_switch_0to1)
   {
@@ -166,6 +195,9 @@ std::list<Target> Tracker::track(
   }else {
     if (state_ == "lost") {
         found = set_target(armors, t);
+    }
+    else if (armors.empty()) {
+      found = update_target(armors, t);
     }
     else {
       if(target_.name == armors.front().name 
@@ -182,7 +214,7 @@ std::list<Target> Tracker::track(
      
     }
   }
-  last_mode = g.mode;
+  last_mode_ = g.mode;
   // found = set_target(armors, t);
 
   state_machine(found);
@@ -423,6 +455,7 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 {
   if (armors.empty()) return false;
 
+  const bool cam_is_short = target_.cam_is_short;
   auto & armor = armors.front();
   solver_->solve(armor);
 
@@ -451,10 +484,22 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
     target_ = Target(armor, t, 0.2, 4, P0_dig);
   }
 
+  target_.cam_is_short = cam_is_short;
+  last_cam_is_short = cam_is_short;
+
+  reset_fft_sample_state();
+  update_fft_sample(armor, t);
   return true;
 }
 bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
+  if(fft_ != nullptr ){
+    auto wave = fft_->get_wave();
+    target_.wave_ = wave.valid()
+              ? std::make_optional(std::move(wave))
+              : std::nullopt;
+
+  }
   target_.predict(t);
   
   bool found = false;
@@ -465,6 +510,8 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
     if (armor.name == target_.name && armor.type == target_.armor_type) {
       solver_->solve(armor);
       target_.update(armor);
+
+      update_fft_sample(armor, t);
       found = true;
       break; // 找到最优匹配后立即退出
     }

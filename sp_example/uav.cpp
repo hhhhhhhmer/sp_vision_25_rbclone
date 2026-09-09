@@ -95,9 +95,10 @@ int main(int argc, char * argv[])
     else if (mode == io::Mode::small_buff || mode == io::Mode::big_buff) {
       buff_solver.set_R_gimbal2world(q);
 
-      auto power_runes = buff_detector.detect(img);
-
-      buff_solver.solve(power_runes);
+      const auto buff_mode = mode == io::Mode::big_buff ? auto_buff::BuffMode::BIG
+                                                        : auto_buff::BuffMode::SMALL;
+      auto buff_observations = buff_detector.detect_tracks(img, buff_mode, t);
+      auto power_runes = buff_solver.solve_all(buff_observations);
 
       io::Command buff_command;
       if (mode == io::Mode::small_buff) {

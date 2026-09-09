@@ -7,6 +7,8 @@
 #include <mutex>
 #include <queue>
 
+#include <thread>
+
 namespace tools
 {
 template <typename T, bool PopWhenFull = false>

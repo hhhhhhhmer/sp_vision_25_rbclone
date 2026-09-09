@@ -9,7 +9,10 @@ add_library(tools OBJECT
     plotter.cpp
     trajectory.cpp
     recorder.cpp
+    reprojection.cpp
     logger.cpp
     pid.cpp
     crc.cpp
+    fft.cpp
+    fps_solve.cpp
 )

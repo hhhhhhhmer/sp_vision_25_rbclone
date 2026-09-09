@@ -16,7 +16,7 @@ const std::string keys =
                
 // 修改：生成棋盘格角点的三维坐标
 std::vector<cv::Point3f> chessboard_3d(const cv::Size & pattern_size, const float square_size)
-{
+{            
   std::vector<cv::Point3f> corners_3d;
 
   for (int i = 0; i < pattern_size.height; i++)

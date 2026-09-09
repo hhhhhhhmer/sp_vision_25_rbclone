@@ -28,7 +28,7 @@ namespace fs = std::filesystem;
 
 const std::string keys =
   "{help h usage ? |                          | 输出命令行参数说明}"
-  "{config-path c  | ../configs/calibration.yaml | yaml配置文件路径 }"
+  "{config-path c  | ../configs/sb_long.yaml | yaml配置文件路径 }"
   "{@input-folder  | ../assets/img_with_q        | 输入文件夹路径   }";
 
 namespace
@@ -699,9 +699,7 @@ void capture_loop(
     }
 
     const Eigen::Quaterniond q = gimbal.q(timestamp).normalized();
-    const Eigen::Matrix3d R_gimbal2world =
-      config.R_gimbal2imubody.transpose() * q.toRotationMatrix() * config.R_gimbal2imubody;
-    const Eigen::Vector3d ypr = tools::eulers(R_gimbal2world, 2, 1, 0) * 57.3;
+    const Eigen::Vector3d ypr = tools::eulers(q, 2, 1, 0) * 57.3;
 
     std::vector<cv::Point2f> corners;
     const bool found = find_corners(image, config.pattern_size(), corners, true);

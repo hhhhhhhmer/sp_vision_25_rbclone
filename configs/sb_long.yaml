@@ -8,13 +8,16 @@ enemy_color: "auto"
 
 
 #####-----神经网络参数-----#####
-yolo_name: yolov8
-classify_model: ../assets/tiny_resnet.onnx
+yolo_name: ov_0526
+classify_model: ../ssets/tiny_resnet.onnx
 yolo11_model_path: ../assets/yolo11.xml
 yolov8_model_path: ../assets/yolov8.xml
 yolov5_model_path: ../assets/yolov5.xml
+ov_0526_model_path: ../assets/yolov5_0526.xml
 device: CPU
-min_confidence: 0.8
+min_confidence: 0.5
+yolo_score_threshold: 0.65
+yolo_nms_threshold: 0.45
 use_traditional: true
 
 #####-----ROI-----#####
@@ -60,15 +63,16 @@ outpost_max_temp_lost_count: 75
 # low_speed_delay_time: 0.093 # s
 
 #####-----aimer参数-----##### 12mm
-yaw_offset: -0.5 # degree 
-pitch_offset: 0.4 # degree 2
+yaw_offset: 1.2 # degree 
+pitch_offset: 1.2 # degree 2
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 decision_speed: 8 # rad/
 
-high_speed_delay_time: 0.018 # s   远 0.25
-low_speed_delay_time: 0.017 # s    远 0.25
-far_pitch_offset: 1.2
+high_speed_delay_time: 0.012 # s   远 0.25
+low_speed_delay_time: 0.012 # s    远 0.25
+far_pitch_offset: 0.9
+far_high_pitch_offset: 1.6
 
 #####-----shooter参数-----#####
 first_tolerance: 3 # 近距离射击容差，degree
@@ -76,37 +80,30 @@ second_tolerance: 2 # 远距离射击容差，degree
 judge_distance: 2 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 
-#12mm camera
-# camera_name: "hikrobot"
-# camera_sn: "DA7188471"
-# exposure_us: 6000
-# gain: 0.7
-# gamma: 0.5  
-# vid_pid: "2ba2:4d55"
-# flip: true
-# mirror: true
-# timestamp_offset_us: 1000 #us
-
-#6mm camera
-# camera_name: "hikrobot"
-# camera_sn: "DA7188471"
-# exposure_us: 9000
-# gain: 0.5
-# vid_pid: "2bdf:0001"
-# flip: true
-# mirror: true
-# timestamp_offset_us: 2000
 
 camera_name: "daheng"
 camera_sn: "FDN24040487"
-exposure_us: 4000
-gain: 0.4
-gamma: 0.6
+exposure_us: 3000
+gain: 1
+gamma: 0.5
+# img_gamma: 0.6
 img_gamma: 1
 vid_pid: "2ba2:4d55"
 flip: true
 mirror: true
 timestamp_offset_us: 2000
+
+# camera_name: "daheng"
+# camera_sn: "FDN24040487"
+# exposure_us: 3000
+# gain: 1
+# gamma: 0.7
+# # img_gamma: 0.6
+# img_gamma: 1
+# vid_pid: "2ba2:4d55"
+# flip: true
+# mirror: true
+# timestamp_offset_us: 2000
 
 # -1  0  0
 #  0 -1  0
@@ -128,14 +125,14 @@ R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
 # # _camera2gimbal第三位调pitch
 
 # #12mm camera
-# 相机同理想情况的偏角: yaw-1.01 pitch0.40 roll-3.17 degree
-# 标定板到世界坐标系原点的水平距离: 3.99 m
-# 标定板同竖直摆放时的偏角: yaw18.59 pitch10.91 roll179.05 degree
-R_camera2gimbal: [0.01724177990211943, 0.008031166851665581, 0.9998190943289729, -0.9983196678891441, -0.05519050378990992, 0.017659246788155888, 0.05532234387221791, -0.9984435430460833, 0.007066089305084381]
-t_camera2gimbal: [-0.06053188184293589, 0.04306961926275315, 0.07400899334239491]
-# 重投影误差: 0.1039px
-camera_matrix: [4733.43401413086, 0, 599.7636786594903, 0, 4741.85173415842, 478.8499763209543, 0, 0, 1]
-distort_coeffs: [0.021580388912033843, -1.367908470971454, -0.0014335525678331896, -0.0030262393654059178, 31.166315287522888]
+# 重投影误差: 0.0673px
+camera_matrix: [3574.955237488581, 0, 594.4218292646041, 0, 3565.0980233561886, 520.9501318718007, 0, 0, 1]
+distort_coeffs: [-0.008254429018079603, 0.042329149179233985, 0.00016619794223107, -0.007085680240458775, 0.6145705110539377]
+# 相机同理想情况的偏角: yaw-0.28 pitch-1.10 roll-4.68 degree
+# 标定板到世界坐标系原点的水平距离: 2.93 m
+# 标定板同竖直摆放时的偏角: yaw128.69 pitch24.94 roll178.70 degree
+R_camera2gimbal: [0.0065230754278618654, -0.018809050043312465, 0.999801814923053, -0.9966531026459786, -0.0815960605312961, 0.004967483459193569, 0.08148645576478779, -0.996487984143432, -0.019278355340952867]
+t_camera2gimbal: [0.07466310992871426, 0.007958887116997182, 0.05009605137794383]
 gimbal_y1: 1
 gimbal_p2: 2
 gimbal_r3: 3
@@ -151,14 +148,15 @@ com_port: "/dev/ttyACM1"
 
 #####-----planner-----#####
 target_dist_error: 0.0
-target_h_error: 0.4
+target_h_error: 0.75
 fire_thresh: 0.003 # 
-small_armor_tolerance: 0.03
+small_armor_tolerance: 0.15
 big_armor_tolerance: 0.22
 tower_and_base_armor_tolerance_: 0.10  # 26赛季前哨站和基地装甲板检测宽度
-gimbal_control_delay: 0.02 
+gimbal_control_delay: 0.0 
 tower_pitch_prediction_time: 0.3
-
+gimbal_delay: 0.000
+shoot_offset: 2
 max_yaw_acc: 50
 Q_yaw: [9e6, 0]
 R_yaw: [1]
@@ -191,7 +189,14 @@ detect:
   fanblades_body_contours_max_area: 4000
   standard_fanblade_path: ./assets/standard_fanblade.jpg
 
-model: "../assets/yolo11_buff_int8.xml"
+model: "/home/cyn/Desktop/sp_vision_25_rbclone/yolo_buff/runs/pose/runs/rune_pose/yolo11n_rune/weights/best.onnx"
+buff_confidence_threshold: 0.7
+buff_keypoint_threshold: 0.3
+buff_rune_radius_m: 0.700
+buff_locked_gate_deg: 25
+buff_switch_gate_deg: 10
+buff_switch_confirm_frames: 3
+buff_locked_lost_max: 6
 #####-----buff_aimer参数-----#####
 aim_time: 0.150         # s
 wait_time: 0.300        # s

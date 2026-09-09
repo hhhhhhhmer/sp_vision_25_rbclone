@@ -38,8 +38,11 @@ public:
     std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract =
       [](const Eigen::VectorXd & a, const Eigen::VectorXd & b) { return a - b; });
 
+  std::map<std::string, double> get_Chi_Square_test_datas() const{
+    return data;
+  };
   std::map<std::string, double> data;  //卡方检验数据
-  std::deque<int> recent_nis_failures{0};
+  std::deque<int> recent_nis_failures;
   size_t window_size = 100;
   double last_nis;
 

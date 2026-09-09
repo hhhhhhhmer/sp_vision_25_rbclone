@@ -1,0 +1,155 @@
+# enemy_color: "auto"
+enemy_color: "blue"
+# enemy_color: "red"
+
+
+#####-----神经网络参数-----#####
+yolo_name: trt_0526                                        # 模型名称(枚举)
+# classify_model: ../assets/tiny_resnet.onnx                 # [未使用] classifier.cpp在TRT模式下不编译
+# yolo11_model_path: ../assets/yolo11.xml                     # [未使用] 仅yolo_name=="yolo11"时读取
+# yolov8_model_path: ../assets/yolov8.xml                     # [未使用] 仅yolo_name=="yolov8"时读取
+# yolov5_model_path: ../assets/yolov5.xml                     # [未使用] 仅yolo_name=="yolov5"时读取
+# trt_engine_path_0708: ../assets/0708_fp16_super.engine      # [未使用] 仅yolo_name=="trt_0708"时读取
+trt_engine_path_0526: ../assets/0526.engine                 # 模型文件路径
+# device: CPU                                                  # [未使用] TensorRT强制使用GPU
+min_confidence: 0.8                                         # (0~1) 检测置信度下限
+# use_traditional: true                                       # [未使用] detector.cpp在TRT模式下不编译
+
+#####-----ROI-----#####
+# roi:                                                         # [未使用] trt_0526不读取ROI参数
+#   x: 420
+#   y: 50
+#   width: 600
+#   height: 600
+
+# use_roi: false                                               # [未使用] trt_0526不读取
+
+#####-----USB相机参数-----#####
+# image_width: 1280                                            # [未使用] Decider/USBCamera无人机未实例化
+# image_height: 720                                            # [未使用] Decider/USBCamera无人机未实例化
+# 
+# fov_h: 57.7 #87.7                                            # [未使用] Decider无人机未实例化
+# fov_v: 56.7                                                  # [未使用] Decider无人机未实例化
+# 
+# new_fov_h: 63.133 #67                                        # [未使用] Decider无人机未实例化
+# new_fov_v: 75.0484                                           # [未使用] Decider无人机未实例化
+# usb_frame_rate: 120                                          # [未使用] USBCamera无人机未实例化
+# usb_exposure: 500 #1-80000______250                          # [未使用] USBCamera无人机未实例化
+# usb_gamma: 160                                               # [未使用] USBCamera无人机未实例化
+# usb_gain: 10 #0-96                                           # [未使用] USBCamera无人机未实例化
+
+#####-----工业相机参数-----#####
+# camera_name: "hikrobot"
+# exposure_us: 2000
+# gain: 16.9
+# vid_pid: "2bdf:0001"
+# flip: false
+# mirror: false
+
+camera_name: "hikrobot"                                     # 相机品牌(枚举)
+camera_sn: "DA7188471"                                      # 相机序列号
+exposure_us: 8000                                           # us 曝光时间
+gain: 1                                                  # (0~1) 增益
+# gamma: 0.7                                                   # [未使用] hikrobot不读取gamma(仅daheng/mindvision读取)
+# vid_pid: "2bdf:0001"                                        # [未使用] hikrobot的vid_pid在camera.cpp中硬编码
+flip: false                                                 # 垂直翻转
+mirror: false                                               # 水平镜像
+timestamp_offset_us: 1000                                   # us 时间戳偏移补偿
+img_gamma: 1.0                                              # Gamma校正(1.0=不校正)
+
+#####-----传统方法参数-----#####
+# threshold: 150                                               # [未使用] detector.cpp在TRT模式下不编译
+# max_angle_error: 45 # degree                                 # [未使用] 同上
+# min_lightbar_ratio: 1.5                                      # [未使用] 同上
+# max_lightbar_ratio: 20                                       # [未使用] 同上
+# min_lightbar_length: 8                                       # [未使用] 同上
+# min_armor_ratio: 1                                           # [未使用] 同上
+# max_armor_ratio: 5                                           # [未使用] 同上
+# max_side_ratio: 1.5                                          # [未使用] 同上
+# max_rectangular_error: 25 # degree                           # [未使用] 同上
+# min_confidence: 0.8                                          # [未使用] 同上(第15行min_confidence被TRT使用)
+
+# number_classifier:                                           # [未使用] rv_detector无人机未使用
+#   model_path: "../assets/rv_model/mlp.onnx"
+#   label_path: "../assets/rv_model/label.txt"
+#   threshold: 0.5
+#   ignore_classes: ["negative"]
+
+#####-----cboard参数-----#####
+# quaternion_canid: 0x01                                       # [未使用] 无人机使用Gimbal串口而非CBoard CAN
+# bullet_speed_canid: 0x110                                    # [未使用] 同上
+# send_canid: 0xff                                             # [未使用] 同上
+# can_interface: "can0"                                        # [未使用] 同上
+
+#####-----tracker参数-----#####
+min_detect_count: 5                                          # 帧 连续检测N帧后进入TRACKING
+max_temp_lost_count: 25                                      # 帧 临时丢失N帧后回LOST
+outpost_max_temp_lost_count: 75                              # 帧 前哨站专用丢失容忍度
+
+#####-----aimer参数-----#####
+yaw_offset: 2.2                                              # ° yaw静靶偏移补偿
+pitch_offset: -1.8                                           # ° pitch静靶偏移补偿
+comming_angle: 60                                            # ° 小陀螺出现侧角度阈值
+leaving_angle: 20                                            # ° 小陀螺消失侧角度阈值
+left_yaw_offset: -1                                          
+right_yaw_offset: -0.6                                      
+decision_speed: 10                                           # rad/s 高低速分界角速度
+high_speed_delay_time: 0.026                                 # s 高速小陀螺预测延迟
+low_speed_delay_time: 0.010                                  # s 低速平移预测延迟
+shoot_offset: 2                                              # 步 MPC开火查询偏移步数
+
+
+#####-----shooter参数-----#####
+first_tolerance: 5                                           # ° 近距离射击容差
+second_tolerance: 2                                          # ° 远距离射击容差
+judge_distance: 3                                            # m 近/远距离分界阈值
+auto_fire: true                                              # 是否自动控制射击
+
+#####-----planner-----#####
+fire_thresh: 3                                               # rad 轨迹残差开火阈值
+target_dist_error: 0                                         # m 距离补偿
+target_h_error: -0.20                                        # m 高度补偿
+small_armor_tolerance: 0.12                                  # rad 小装甲板开火窗口
+big_armor_tolerance: 0.22                                    # rad 大装甲板开火窗口
+gimbal_control_delay: 0.012                                  # s 云台控制延迟
+tower_pitch_prediction_time: 0.05                            # s 前哨站pitch预测时间
+far_pitch_offset: 1.7                                        # ° 远距离(target_h>1m)pitch补偿
+tower_and_base_armor_tolerance_: 0.10                        # rad 前哨站/基地开火窗口
+gimbal_delay: 0.002                                          # s 云台总延迟(系统+电控)
+
+max_yaw_acc: 50                                              # rad/s² yaw MPC角加速度上限
+Q_yaw: [9e6, 0]                                              # yaw跟踪代价权重
+R_yaw: [1]                                                   # yaw平滑代价权重
+
+max_pitch_acc: 100                                           # rad/s² pitch MPC角加速度上限
+Q_pitch: [9e6, 0]                                            # pitch跟踪代价权重
+R_pitch: [1]                                                 # pitch平滑代价权重
+
+#####-----decider参数-----#####
+# mode: 1                                                      # [未使用] Decider无人机未实例化
+
+#####-----工业相机标定参数-----#####
+R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]            # 旋转矩阵 IMU→云台(3x3行优先)
+
+# 重投影误差: 0.0600px
+camera_matrix: [3629.2604024723614, 0, 615.76296028559454, 0, 3617.5424611963276, 537.28249377915051, 0, 0, 1]  # 像素 相机内参(3x3行优先)
+distort_coeffs: [-0.0064563365740047977, 0.26597520888340187, -0.00091608724392189006, -0.0084950810347407466, -0.87748546654082848]  # 畸变系数(k1,k2,p1,p2,k3)
+
+# 相机同理想情况的偏角: yaw0.37 pitch1.64 roll-2.29 degree
+R_camera2gimbal: [-0.0075966848382389429, 0.028332439342095388, 0.99956968904643917, -0.99917500836468665, -0.040094976336004562, -0.0064572077590568473, 0.039894774581351655, -0.99879410578634353, 0.028613654215451589]  # 旋转矩阵 手眼标定(3x3行优先)
+t_camera2gimbal: [-0.0064300910580854069, 0.037276498186262115, -0.055090648902732367]  # m 手眼标定平移向量
+
+
+com_port:                                                     # 按顺序尝试串口设备路径
+  - "/dev/ttyUSB0"
+  - "/dev/ttyUSB1"
+  - "/dev/ttyACM0"
+# 陀螺仪是否装错, 编号012分别代表电控坐标系ypr，想换旋转轴只需要对编号进行互换即可，负号就是对当前值取负，交换完再取负
+# 上车前记得对齐电控坐标系和济瞄惯性系
+gimbal_y1: 1                                                 # yaw轴映射(±1/±2/±3 负号取反)
+gimbal_p2: 2                                                 # pitch轴映射
+gimbal_r3: 3                                                 # roll轴映射
+
+pattern_cols: 11      # 棋盘格每行的内角点数（格子数-1）
+pattern_rows: 8      # 棋盘格每列的内角点数（格子数-1）
+square_size_mm: 30   # 棋盘格方块大小（毫米）

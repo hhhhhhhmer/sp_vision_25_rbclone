@@ -43,7 +43,6 @@ int main(int argc, char * argv[])
     return 0;
   }
 
-  io::Camera::initSDK();
   auto short_camera_config_path = cli.get<std::string>("short_camera");
   auto long_camera_config_path = cli.get<std::string>("long_camera");
   // 全向感知相机（工业相机）

@@ -1,11 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
-set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake")
-
-find_package(OpenVINO REQUIRED)
 find_package(Ceres REQUIRED)
 
-add_library(auto_buff OBJECT 
+set(AUTO_BUFF_SOURCES
     buff_type.cpp
+    buff_track_bank.cpp
     buff_detector.cpp
     buff_solver.cpp
     buff_aimer.cpp
@@ -13,4 +11,24 @@ add_library(auto_buff OBJECT
     yolo11_buff.cpp
 )
 
-target_link_libraries(auto_buff auto_aim openvino::runtime ${CERES_LIBRARIES})
+if(TENSOR_RT_MAKE)
+    enable_language(CUDA)
+    list(APPEND AUTO_BUFF_SOURCES trt_yolo11_buff_kernel.cu)
+endif()
+
+add_library(auto_buff OBJECT ${AUTO_BUFF_SOURCES})
+
+target_link_libraries(auto_buff PUBLIC auto_aim ${CERES_LIBRARIES})
+
+if(OPENVINO_MAKE)
+    target_compile_definitions(auto_buff PRIVATE SP_AUTO_BUFF_OPENVINO)
+    target_link_libraries(auto_buff PUBLIC openvino::runtime)
+elseif(TENSOR_RT_MAKE)
+    find_package(CUDAToolkit REQUIRED)
+    target_compile_definitions(auto_buff PRIVATE SP_AUTO_BUFF_TENSORRT)
+    target_include_directories(auto_buff PRIVATE ${TENSORRT_INCLUDE_DIR})
+    target_link_libraries(auto_buff PUBLIC
+        ${TENSORRT_INFER_LIBRARY}
+        ${TENSORRT_PLUGIN_LIBRARY}
+        CUDA::cudart)
+endif()

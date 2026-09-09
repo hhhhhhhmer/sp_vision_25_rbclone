@@ -1,0 +1,67 @@
+# ROS 2 simulator input and detection
+enemy_color: "blue"
+yolo_name: yolov8
+classify_model: ../assets/tiny_resnet.onnx
+yolo11_model_path: ../assets/yolo11.xml
+yolov8_model_path: ../assets/yolov8.xml
+yolov5_model_path: ../assets/yolov5.xml
+trt_engine_path_0708: ../assets/0708_fp16_super.engine
+trt_engine_path_0526: ../assets/0526.engine
+device: CPU
+detect_color: -1
+min_confidence: 0.65
+
+
+threshold: 150
+max_angle_error: 45
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25
+
+roi:
+  x: 0
+  y: 0
+  width: -1
+  height: -1
+
+use_roi: false
+# Tracker
+min_detect_count: 5
+max_temp_lost_count: 20
+outpost_max_temp_lost_count: 75
+
+# Planner
+yaw_offset: 0
+pitch_offset: 0
+far_pitch_offset: 0
+decision_speed: 8
+high_speed_delay_time: 0.030
+low_speed_delay_time: 0.015
+target_dist_error: 0
+target_h_error: 0
+fire_thresh: 0.003
+small_armor_tolerance: 0.12
+big_armor_tolerance: 0.22
+tower_and_base_armor_tolerance_: 0.10
+gimbal_control_delay: 0.08
+tower_pitch_prediction_time: 0.05
+max_yaw_acc: 50
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+max_pitch_acc: 100
+Q_pitch: [9e6, 0]
+R_pitch: [1]
+
+# Daedalus defaults: 1440x1080, vertical FOV 45 degrees, no distortion.
+camera_matrix: [1303.675324, 0, 720, 0, 1303.675324, 540, 0, 0, 1]
+distort_coeffs: [0, 0, 0, 0, 0]
+
+# ROS gimbal_link uses x-forward/y-left/z-up; camera optical uses
+# x-right/y-down/z-forward. The /tf quaternion already is gimbal-to-odom.
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+t_camera2gimbal: [0, 0, 0]

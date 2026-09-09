@@ -1,326 +1,512 @@
 #include "yolo11_buff.hpp"
-#include <openvino/core/preprocess/pre_post_process.hpp> // 新增 PPP 头文件
 
-const double ConfidenceThreshold = 0.7f;
-const double IouThreshold = 0.4f;
+#include <algorithm>
+#include <array>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "tools/logger.hpp"
+
+#if defined(SP_AUTO_BUFF_OPENVINO)
+#include <openvino/core/preprocess/pre_post_process.hpp>
+#include <openvino/openvino.hpp>
+#elif defined(SP_AUTO_BUFF_TENSORRT)
+#include <NvInfer.h>
+#include <NvInferPlugin.h>
+#include <cuda_runtime_api.h>
+#include "trt_yolo11_buff_kernel.h"
+#else
+#error "YOLO11_BUFF requires SP_AUTO_BUFF_OPENVINO or SP_AUTO_BUFF_TENSORRT"
+#endif
+
 namespace auto_buff
 {
+namespace
+{
+cv::Rect clip_rect(const cv::Rect & rect, const cv::Size & size)
+{
+  return rect & cv::Rect(0, 0, size.width, size.height);
+}
+
+cv::Point2f rect_center(const cv::Rect_<float> & rect)
+{
+  return {rect.x + rect.width * 0.5f, rect.y + rect.height * 0.5f};
+}
+
+cv::Scalar color_for_label(int label)
+{
+  static const std::array<cv::Scalar, 3> colors = {
+    cv::Scalar(0, 220, 255), cv::Scalar(255, 160, 0), cv::Scalar(80, 255, 80)};
+  if (label < 0 || label >= static_cast<int>(colors.size())) return {255, 255, 255};
+  return colors[label];
+}
+
+float top_left_letterbox(
+  const cv::Mat & input, cv::Mat & output, const cv::Size & network_size)
+{
+  const float scale = std::min(
+    network_size.height / static_cast<float>(input.rows),
+    network_size.width / static_cast<float>(input.cols));
+  const cv::Matx23f transform{scale, 0.0f, 0.0f, 0.0f, scale, 0.0f};
+  cv::warpAffine(
+    input, output, transform, network_size, cv::INTER_LINEAR, cv::BORDER_CONSTANT,
+    cv::Scalar(0, 0, 0));
+  return 1.0f / scale;
+}
+
+#if defined(SP_AUTO_BUFF_TENSORRT)
+class TensorRTLogger : public nvinfer1::ILogger
+{
+public:
+  void log(Severity severity, const char * message) noexcept override
+  {
+    if (severity <= Severity::kWARNING) std::fprintf(stderr, "[TensorRT] %s\n", message);
+  }
+};
+
+TensorRTLogger g_trt_logger;
+
+void check_cuda(cudaError_t status, const char * operation)
+{
+  if (status != cudaSuccess) {
+    throw std::runtime_error(
+      std::string(operation) + " failed: " + cudaGetErrorString(status));
+  }
+}
+
+size_t tensor_volume(const nvinfer1::Dims & dims)
+{
+  size_t volume = 1;
+  for (int i = 0; i < dims.nbDims; ++i) {
+    if (dims.d[i] <= 0) throw std::runtime_error("Dynamic TensorRT shapes are not supported");
+    volume *= static_cast<size_t>(dims.d[i]);
+  }
+  return volume;
+}
+#endif
+}  // namespace
+
+struct YOLO11_BUFF::Backend
+{
+  struct Result
+  {
+    const float * data;
+    int rows;
+    int cols;
+    float inverse_scale;
+  };
+
+#if defined(SP_AUTO_BUFF_OPENVINO)
+  explicit Backend(const std::string & model_path)
+  {
+    auto model = core.read_model(model_path);
+    ov::preprocess::PrePostProcessor ppp(model);
+    ppp.input()
+      .tensor()
+      .set_element_type(ov::element::u8)
+      .set_layout("NHWC")
+      .set_color_format(ov::preprocess::ColorFormat::BGR);
+    ppp.input()
+      .preprocess()
+      .convert_element_type(ov::element::f32)
+      .convert_color(ov::preprocess::ColorFormat::RGB)
+      .scale({255.0, 255.0, 255.0});
+    ppp.input().model().set_layout("NCHW");
+
+    model = ppp.build();
+    compiled_model =
+      core.compile_model(model, "CPU", ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+    infer_request = compiled_model.create_infer_request();
+    input_tensor = infer_request.get_input_tensor();
+  }
+
+  Result infer(const cv::Mat & image)
+  {
+    const ov::Shape input_shape = input_tensor.get_shape();
+    if (input_shape.size() != 4 || input_shape[3] != 3) {
+      throw std::runtime_error("Expected an NHWC OpenVINO input tensor");
+    }
+
+    cv::Mat letterboxed;
+    const float inverse_scale = top_left_letterbox(
+      image, letterboxed,
+      cv::Size(static_cast<int>(input_shape[2]), static_cast<int>(input_shape[1])));
+    std::memcpy(
+      input_tensor.data<uint8_t>(), letterboxed.data,
+      letterboxed.total() * letterboxed.elemSize());
+
+    infer_request.infer();
+    output_tensor = infer_request.get_output_tensor();
+    const ov::Shape output_shape = output_tensor.get_shape();
+    if (output_shape.size() != 3 || output_shape[0] != 1) {
+      throw std::runtime_error("Expected a [1, channels, candidates] OpenVINO output");
+    }
+    return {
+      output_tensor.data<const float>(), static_cast<int>(output_shape[1]),
+      static_cast<int>(output_shape[2]), inverse_scale};
+  }
+
+  ov::Core core;
+  ov::CompiledModel compiled_model;
+  ov::InferRequest infer_request;
+  ov::Tensor input_tensor;
+  ov::Tensor output_tensor;
+#elif defined(SP_AUTO_BUFF_TENSORRT)
+  explicit Backend(const std::string & engine_path)
+  {
+    try {
+      std::ifstream file(engine_path, std::ios::binary | std::ios::ate);
+      if (!file) throw std::runtime_error("Cannot open TensorRT engine: " + engine_path);
+      const std::streamsize size = file.tellg();
+      if (size <= 0) throw std::runtime_error("TensorRT engine is empty: " + engine_path);
+      file.seekg(0, std::ios::beg);
+      std::vector<char> serialized(static_cast<size_t>(size));
+      if (!file.read(serialized.data(), size)) {
+        throw std::runtime_error("Failed to read TensorRT engine: " + engine_path);
+      }
+
+      initLibNvInferPlugins(&g_trt_logger, "");
+      runtime = nvinfer1::createInferRuntime(g_trt_logger);
+      if (runtime == nullptr) throw std::runtime_error("Failed to create TensorRT runtime");
+      engine = runtime->deserializeCudaEngine(serialized.data(), serialized.size());
+      if (engine == nullptr) throw std::runtime_error("Failed to deserialize TensorRT engine");
+      context = engine->createExecutionContext();
+      if (context == nullptr) throw std::runtime_error("Failed to create TensorRT context");
+
+      for (int i = 0; i < engine->getNbIOTensors(); ++i) {
+        const char * name = engine->getIOTensorName(i);
+        const auto mode = engine->getTensorIOMode(name);
+        if (mode == nvinfer1::TensorIOMode::kINPUT) {
+          if (!input_name.empty()) throw std::runtime_error("Expected exactly one engine input");
+          input_name = name;
+        } else {
+          if (!output_name.empty()) throw std::runtime_error("Expected exactly one engine output");
+          output_name = name;
+        }
+      }
+      if (input_name.empty() || output_name.empty()) {
+        throw std::runtime_error("TensorRT engine must have one input and one output");
+      }
+      if (
+        engine->getTensorDataType(input_name.c_str()) != nvinfer1::DataType::kFLOAT ||
+        engine->getTensorDataType(output_name.c_str()) != nvinfer1::DataType::kFLOAT) {
+        throw std::runtime_error("TensorRT engine input and output must use FP32 I/O tensors");
+      }
+
+      const nvinfer1::Dims input_dims = engine->getTensorShape(input_name.c_str());
+      const nvinfer1::Dims output_dims = engine->getTensorShape(output_name.c_str());
+      if (
+        input_dims.nbDims != 4 || input_dims.d[0] != 1 || input_dims.d[1] != 3 ||
+        output_dims.nbDims != 3 || output_dims.d[0] != 1) {
+        throw std::runtime_error(
+          "Expected engine tensors [1,3,H,W] and [1,channels,candidates]");
+      }
+      input_height = input_dims.d[2];
+      input_width = input_dims.d[3];
+      output_rows = output_dims.d[1];
+      output_cols = output_dims.d[2];
+      input_bytes = tensor_volume(input_dims) * sizeof(float);
+      output_bytes = tensor_volume(output_dims) * sizeof(float);
+
+      check_cuda(
+        cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
+        "cudaStreamCreateWithFlags");
+      check_cuda(cudaMalloc(&input_device, input_bytes), "cudaMalloc(input)");
+      check_cuda(cudaMalloc(&output_device, output_bytes), "cudaMalloc(output)");
+      check_cuda(
+        cudaHostAlloc(
+          reinterpret_cast<void **>(&output_host), output_bytes, cudaHostAllocDefault),
+        "cudaHostAlloc(output)");
+      if (!context->setTensorAddress(input_name.c_str(), input_device)) {
+        throw std::runtime_error("Failed to bind TensorRT input tensor");
+      }
+      if (!context->setTensorAddress(output_name.c_str(), output_device)) {
+        throw std::runtime_error("Failed to bind TensorRT output tensor");
+      }
+
+      // Trigger TensorRT/CUDA lazy loading during initialization instead of
+      // stalling the first frame in the control loop.
+      check_cuda(cudaMemsetAsync(input_device, 0, input_bytes, stream), "cudaMemsetAsync(warmup)");
+      if (!context->enqueueV3(stream)) throw std::runtime_error("TensorRT warmup enqueueV3 failed");
+      check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(warmup)");
+    } catch (...) {
+      release();
+      throw;
+    }
+  }
+
+  ~Backend() { release(); }
+
+  Result infer(const cv::Mat & image)
+  {
+    if (image.type() != CV_8UC3) {
+      throw std::runtime_error("TensorRT buff backend expects a CV_8UC3 BGR image");
+    }
+    const float scale = std::min(
+      input_height / static_cast<float>(image.rows),
+      input_width / static_cast<float>(image.cols));
+    const float inverse_scale = 1.0f / scale;
+    const std::size_t source_bytes =
+      static_cast<std::size_t>(image.rows) * image.cols * image.elemSize();
+    if (source_bytes > image_capacity) {
+      if (image_device != nullptr) {
+        check_cuda(cudaFree(image_device), "cudaFree(image)");
+        image_device = nullptr;
+        image_capacity = 0;
+      }
+      check_cuda(
+        cudaMalloc(reinterpret_cast<void **>(&image_device), source_bytes), "cudaMalloc(image)");
+      image_capacity = source_bytes;
+    }
+
+    check_cuda(
+      cudaMemcpy2DAsync(
+        image_device, image.cols * image.elemSize(), image.data, image.step,
+        image.cols * image.elemSize(), image.rows, cudaMemcpyHostToDevice, stream),
+      "cudaMemcpy2DAsync(image)");
+    launch_yolo11_buff_preprocess(
+      image_device, image.cols, image.rows, image.cols * image.elemSize(),
+      static_cast<float *>(input_device), input_width, input_height, scale, stream);
+    check_cuda(cudaGetLastError(), "launch_yolo11_buff_preprocess");
+    if (!context->enqueueV3(stream)) throw std::runtime_error("TensorRT enqueueV3 failed");
+    check_cuda(
+      cudaMemcpyAsync(
+        output_host, output_device, output_bytes, cudaMemcpyDeviceToHost, stream),
+      "cudaMemcpyAsync(output)");
+    check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize");
+    return {output_host, output_rows, output_cols, inverse_scale};
+  }
+
+  void release() noexcept
+  {
+    if (output_device != nullptr) cudaFree(output_device);
+    if (input_device != nullptr) cudaFree(input_device);
+    if (image_device != nullptr) cudaFree(image_device);
+    if (output_host != nullptr) cudaFreeHost(output_host);
+    if (stream != nullptr) cudaStreamDestroy(stream);
+    delete context;
+    delete engine;
+    delete runtime;
+    output_device = nullptr;
+    input_device = nullptr;
+    image_device = nullptr;
+    output_host = nullptr;
+    stream = nullptr;
+    context = nullptr;
+    engine = nullptr;
+    runtime = nullptr;
+  }
+
+  nvinfer1::IRuntime * runtime = nullptr;
+  nvinfer1::ICudaEngine * engine = nullptr;
+  nvinfer1::IExecutionContext * context = nullptr;
+  cudaStream_t stream = nullptr;
+  void * input_device = nullptr;
+  void * output_device = nullptr;
+  unsigned char * image_device = nullptr;
+  std::size_t image_capacity = 0;
+  std::string input_name;
+  std::string output_name;
+  int input_height = 0;
+  int input_width = 0;
+  int output_rows = 0;
+  int output_cols = 0;
+  size_t input_bytes = 0;
+  size_t output_bytes = 0;
+  float * output_host = nullptr;
+#endif
+};
+
 YOLO11_BUFF::YOLO11_BUFF(const std::string & config)
 {
-  auto yaml = YAML::LoadFile(config);
-  std::string model_path = yaml["model"].as<std::string>();
-  
-  // 1. 读取模型
-  model = core.read_model(model_path);
+  const auto yaml = YAML::LoadFile(config);
+  if (yaml["buff_confidence_threshold"]) {
+    confidence_threshold_ = yaml["buff_confidence_threshold"].as<float>();
+  }
+  if (yaml["buff_keypoint_threshold"]) {
+    keypoint_threshold_ = yaml["buff_keypoint_threshold"].as<float>();
+  }
+  if (yaml["buff_iou_threshold"]) iou_threshold_ = yaml["buff_iou_threshold"].as<float>();
 
-  // ======================= 新增的 PPP 预处理代码 开始 =======================
-  ov::preprocess::PrePostProcessor ppp(model);
-
-  ppp.input()
-      .tensor()
-      .set_element_type(ov::element::u8)  // OpenCV 的 Mat 默认是 uint8
-      .set_layout("NHWC")                 // OpenCV 默认是 NHWC 格式
-      .set_color_format(ov::preprocess::ColorFormat::BGR); 
-
-  ppp.input()
-      .preprocess()
-      .convert_element_type(ov::element::f32) 
-      .convert_color(ov::preprocess::ColorFormat::RGB) 
-      .scale({255.0, 255.0, 255.0});      
-
-  ppp.input().model().set_layout("NCHW");
-
-  model = ppp.build();
-  // ======================= 新增的 PPP 预处理代码 结束 =======================
-
-  /// 2. 载入并编译模型 (替换为你需要的 LATENCY 低延迟模式)
-  compiled_model = core.compile_model(model, "CPU", ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
-  
-  /// 3. 创建推理请求
-  infer_request = compiled_model.create_infer_request();
-  
-  // 4. 获取模型输入节点
-  input_tensor = infer_request.get_input_tensor();
-  
-  // 自动从预处理后的模型中获取输入形状，再也不用手动改数字了！
-auto input_shape = compiled_model.input().get_shape();
-// 因为我们加了 PPP 把输入设为 NHWC，所以这里的 input_shape 通常就是 {1, H, W, 3}
-input_tensor.set_shape(input_shape);
+#if defined(SP_AUTO_BUFF_OPENVINO)
+  const std::string model_path = yaml["model"].as<std::string>();
+  backend_ = std::make_unique<Backend>(model_path);
+#elif defined(SP_AUTO_BUFF_TENSORRT)
+  const YAML::Node path_node = yaml["buff_engine_path"];
+  if (!path_node) {
+    throw std::runtime_error("TensorRT buff backend requires 'buff_engine_path' in the config");
+  }
+  backend_ = std::make_unique<Backend>(path_node.as<std::string>());
+#endif
 }
+
+YOLO11_BUFF::~YOLO11_BUFF() = default;
 
 std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_multicandidateboxes(cv::Mat & image)
 {
-  const int64 start = cv::getTickCount();  // 设置模型输入
-
-  if (image.empty()) {
-    tools::logger()->warn("Empty img!, camera drop!");
-    return std::vector<YOLO11_BUFF::Object> ();
-  }
-
-  /// 预处理：调用统一的图像填充转换函数，并获取正确的缩放 factor
-  const float factor = fill_tensor_data_image(input_tensor, image);
-
-  /// 执行推理计算
-  infer_request.infer();
-
-  /// 处理推理计算结果
-  const ov::Tensor output = infer_request.get_output_tensor();  // 获得推理结果
-  const ov::Shape output_shape = output.get_shape();
-  const float * output_buffer = output.data<const float>();
-  const int out_rows = output_shape[1];  // 获得"output"节点的rows 15
-  const int out_cols = output_shape[2];  // 获得"output"节点的cols 8400
-  const cv::Mat det_output(
-    out_rows, out_cols, CV_32F, (float *)output_buffer);  // output_buff类型转换
-  std::vector<cv::Rect> boxes;                            // 目标框
-  std::vector<float> confidences;                         // 置信度
-  std::vector<std::vector<float>> objects_keypoints;      // 关键点
-  // 输出格式是[15,8400], 每列代表一个框(即最多有8400个框), 前面4行分别是[cx, cy, ow, oh], 中间score, 最后5*2关键点(3代表每个关键点的信息, 包括[x, y, visibility],如果是2，则没有visibility)
-  // 15 = 4 + 1 + NUM_POINTS * 2      56
-  for (int i = 0; i < det_output.cols; ++i) {
-    const float score = det_output.at<float>(4, i);
-    // 如果置信度满足条件则放进vector
-    if (score > ConfidenceThreshold) {
-      // 获取目标框
-      const float cx = det_output.at<float>(0, i);
-      const float cy = det_output.at<float>(1, i);
-      const float ow = det_output.at<float>(2, i);
-      const float oh = det_output.at<float>(3, i);
-      cv::Rect box;
-      box.x = static_cast<int>((cx - 0.5 * ow) * factor);
-      box.y = static_cast<int>((cy - 0.5 * oh) * factor);
-      box.width = static_cast<int>(ow * factor);
-      box.height = static_cast<int>(oh * factor);
-      boxes.push_back(box);
-
-      // 获取置信度
-      confidences.push_back(score);
-
-      // 获取关键点
-     std::vector<float> keypoints;
-      cv::Mat kpts = det_output.col(i).rowRange(5, 5 + NUM_POINTS * 2);
-      for (int j = 0; j < NUM_POINTS; ++j) {
-        const float x = kpts.at<float>(j * 2 + 0, 0) * factor;
-        const float y = kpts.at<float>(j * 2 + 1, 0) * factor;
-        // const float s = kpts.at<float>(j * 3 + 2, 0);
-        keypoints.push_back(x);
-        keypoints.push_back(y);
-        // keypoints.push_back(s);
-      }
-      objects_keypoints.push_back(keypoints);
-    }
-  }
-
-  /// NMS,消除具有较低置信度的冗余重叠框,用于处理多个框的情况
-  std::vector<int> indexes;
-  cv::dnn::NMSBoxes(boxes, confidences, ConfidenceThreshold, IouThreshold, indexes);
-
-  std::vector<Object> object_result;  // 最终得到的object
-  for (size_t i = 0; i < indexes.size(); ++i) {
-    Object obj;
-    const int index = indexes[i];
-    obj.rect = boxes[index];
-    obj.prob = confidences[index];
-
-    const std::vector<float> & keypoint = objects_keypoints[index];
-    for (int j = 0; j < NUM_POINTS; ++j) {
-      const float x_coord = keypoint[j * 2];
-      const float y_coord = keypoint[j * 2 + 1];
-      obj.kpt.push_back(cv::Point2f(x_coord, y_coord));
-    }
-    object_result.push_back(obj);
-
-    /// 绘制关键点和连线
-    cv::rectangle(image, obj.rect, cv::Scalar(255, 255, 255), 1, 8);            // 绘制矩形框
-    const std::string label = "buff:" + std::to_string(obj.prob).substr(0, 4);  // 绘制标签
-    const cv::Size textSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, nullptr);
-    const cv::Rect textBox(
-      obj.rect.tl().x, obj.rect.tl().y - 15, textSize.width, textSize.height + 5);
-    cv::rectangle(image, textBox, cv::Scalar(0, 255, 255), cv::FILLED);
-    cv::putText(
-      image, label, cv::Point(obj.rect.tl().x, obj.rect.tl().y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-      cv::Scalar(0, 0, 0));
-    const int radius = 2;  // 绘制关键点
-    const cv::Size & shape = image.size();
-    for (int k = 0; k < NUM_POINTS; ++k)
-      cv::circle(image, obj.kpt[k], radius, cv::Scalar(255, 0, 0), -1, cv::LINE_AA);
-  }
-  /// 计算FPS
-  const float t = (cv::getTickCount() - start) / static_cast<float>(cv::getTickFrequency());
-  cv::putText(
-    image, cv::format("FPS: %.2f", 1.0 / t), cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 2.0,
-    cv::Scalar(255, 0, 0), 2, 8);
-
-  // #ifdef SAVE
-  //         save("save", image);
-  // #endif
-  return object_result;
+  return infer_and_decode(image);
 }
 
 std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_onecandidatebox(cv::Mat & image)
 {
-  const int64 start = cv::getTickCount();  // 设置模型输入
+  auto objects = infer_and_decode(image);
+  if (objects.empty()) return {};
+  auto best = std::max_element(objects.begin(), objects.end(), [](const Object & a, const Object & b) {
+    return a.prob < b.prob;
+  });
+  return {*best};
+}
 
+std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::infer_and_decode(cv::Mat & image)
+{
+  const int64 start = cv::getTickCount();
   if (image.empty()) {
     tools::logger()->warn("Empty img!, camera drop!");
-    return std::vector<YOLO11_BUFF::Object> ();
+    return {};
   }
 
-  /// 预处理
-  const float factor = fill_tensor_data_image(input_tensor, image);  // 填充图片到合适的input size
+  const Backend::Result result = backend_->infer(image);
+  auto objects = decode(
+    result.data, result.rows, result.cols, result.inverse_scale, image.size());
+  const double elapsed_s =
+    (cv::getTickCount() - start) / static_cast<double>(cv::getTickFrequency());
+  draw_objects(image, objects, elapsed_s);
+  return objects;
+}
 
-  /// 执行推理计算
-
-  infer_request.infer();
-
-  /// 处理推理计算结果  output 输出格式是[17,8400], 每列代表一个框(即最多有8400个框), 前面4行分别是[cx, cy, ow, oh], 中间score, 最后6*2关键点
-
-  const ov::Tensor output = infer_request.get_output_tensor();  // 获得推理结果
-  const ov::Shape output_shape = output.get_shape();
-  const float * output_buffer = output.data<const float>();
-  const int out_rows = output_shape[1];  // 获得"output"节点的rows 17
-  const int out_cols = output_shape[2];  // 获得"output"节点的cols 8400
-  const cv::Mat det_output(
-    out_rows, out_cols, CV_32F, (float *)output_buffer);  // output_buff类型转换
-
-  /// 寻找置信度最大的框
-
-  int best_index = -1;
-  float max_confidence = 0.0f;
-  for (int i = 0; i < det_output.cols; ++i) {
-    const float confidence = det_output.at<float>(4, i);
-    if (confidence > max_confidence) {
-      max_confidence = confidence;
-      best_index = i;
-    }
+std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::decode(
+  const float * output, int output_rows, int output_cols, float inverse_scale,
+  const cv::Size & image_size) const
+{
+  const int expected_rows = 4 + NUM_CLASSES + NUM_POINTS * KPT_DIMS;
+  if (output_rows != expected_rows) {
+    throw std::runtime_error(
+      "Unexpected YOLO11 buff output channels: " + std::to_string(output_rows) +
+      ", expected " + std::to_string(expected_rows));
   }
-  std::vector<Object> object_result;  // 最终得到的object
-  if (max_confidence > ConfidenceThreshold) {
-    Object obj;
-    // 获取目标框
-    const float cx = det_output.at<float>(0, best_index);
-    const float cy = det_output.at<float>(1, best_index);
-    const float ow = det_output.at<float>(2, best_index);
-    const float oh = det_output.at<float>(3, best_index);
-    obj.rect.x = static_cast<int>((cx - 0.5 * ow) * factor);
-    obj.rect.y = static_cast<int>((cy - 0.5 * oh) * factor);
-    obj.rect.width = static_cast<int>(ow * factor);
-    obj.rect.height = static_cast<int>(oh * factor);
-    // 获取置信度
-    obj.prob = max_confidence;
-    // 获取关键点
-    cv::Mat kpts = det_output.col(best_index).rowRange(5, 5 + NUM_POINTS * 2);
-    for (int i = 0; i < NUM_POINTS; ++i) {
-      const float x = kpts.at<float>(i * 2 + 0, 0) * factor;
-      const float y = kpts.at<float>(i * 2 + 1, 0) * factor;
-      obj.kpt.push_back(cv::Point2f(x, y));
+
+  const cv::Mat detections(output_rows, output_cols, CV_32F, const_cast<float *>(output));
+  std::vector<cv::Rect> boxes;
+  std::vector<float> confidences;
+  std::vector<int> labels;
+  std::vector<std::vector<cv::Point2f>> keypoints;
+  std::vector<std::vector<float>> keypoint_confidences;
+
+  for (int candidate = 0; candidate < detections.cols; ++candidate) {
+    int label = -1;
+    float score = -std::numeric_limits<float>::max();
+    for (int cls = 0; cls < NUM_CLASSES; ++cls) {
+      const float class_score = detections.at<float>(4 + cls, candidate);
+      if (class_score > score) {
+        score = class_score;
+        label = cls;
+      }
     }
-    object_result.push_back(obj);
+    if (score < confidence_threshold_) continue;
 
-    /// 0.3-0.7 save(这是用来继续训练数据集用的)
-    // if (max_confidence < 0.7) save(std::to_string(start), image);
+    const float center_x = detections.at<float>(0, candidate);
+    const float center_y = detections.at<float>(1, candidate);
+    const float width = detections.at<float>(2, candidate);
+    const float height = detections.at<float>(3, candidate);
+    cv::Rect box(
+      static_cast<int>((center_x - width * 0.5f) * inverse_scale),
+      static_cast<int>((center_y - height * 0.5f) * inverse_scale),
+      static_cast<int>(width * inverse_scale), static_cast<int>(height * inverse_scale));
+    box = clip_rect(box, image_size);
+    if (box.empty()) continue;
 
-    /// 绘制关键点和连线
-    cv::rectangle(image, obj.rect, cv::Scalar(255, 255, 255), 1, 8);                  // 绘制矩形框
-    const std::string label = "buff:" + std::to_string(max_confidence).substr(0, 4);  // 绘制标签
-    const cv::Size textSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, nullptr);
-    const cv::Rect textBox(
-      obj.rect.tl().x, obj.rect.tl().y - 15, textSize.width, textSize.height + 5);
-    cv::rectangle(image, textBox, cv::Scalar(0, 255, 255), cv::FILLED);
+    std::vector<cv::Point2f> candidate_keypoints;
+    std::vector<float> candidate_keypoint_confidences;
+    const int keypoint_offset = 4 + NUM_CLASSES;
+    for (int point = 0; point < NUM_POINTS; ++point) {
+      candidate_keypoints.emplace_back(
+        detections.at<float>(keypoint_offset + point * KPT_DIMS, candidate) * inverse_scale,
+        detections.at<float>(keypoint_offset + point * KPT_DIMS + 1, candidate) * inverse_scale);
+      candidate_keypoint_confidences.push_back(
+        detections.at<float>(keypoint_offset + point * KPT_DIMS + 2, candidate));
+    }
+
+    boxes.push_back(box);
+    confidences.push_back(score);
+    labels.push_back(label);
+    keypoints.push_back(std::move(candidate_keypoints));
+    keypoint_confidences.push_back(std::move(candidate_keypoint_confidences));
+  }
+
+  std::vector<int> kept_indexes;
+  for (int cls = 0; cls < NUM_CLASSES; ++cls) {
+    std::vector<cv::Rect> class_boxes;
+    std::vector<float> class_confidences;
+    std::vector<int> class_indexes;
+    for (size_t i = 0; i < labels.size(); ++i) {
+      if (labels[i] != cls) continue;
+      class_boxes.push_back(boxes[i]);
+      class_confidences.push_back(confidences[i]);
+      class_indexes.push_back(static_cast<int>(i));
+    }
+
+    std::vector<int> nms_indexes;
+    cv::dnn::NMSBoxes(
+      class_boxes, class_confidences, confidence_threshold_, iou_threshold_, nms_indexes);
+    for (int index : nms_indexes) kept_indexes.push_back(class_indexes[index]);
+  }
+  std::sort(kept_indexes.begin(), kept_indexes.end(), [&](int lhs, int rhs) {
+    return confidences[lhs] > confidences[rhs];
+  });
+
+  std::vector<Object> objects;
+  objects.reserve(kept_indexes.size());
+  for (int index : kept_indexes) {
+    objects.push_back(
+      {boxes[index], labels[index], confidences[index], std::move(keypoints[index]),
+       std::move(keypoint_confidences[index])});
+  }
+  return objects;
+}
+
+void YOLO11_BUFF::draw_objects(
+  cv::Mat & image, const std::vector<Object> & objects, double elapsed_s) const
+{
+  for (const Object & object : objects) {
+    const cv::Scalar color = color_for_label(object.label);
+    cv::rectangle(image, object.rect, color, 1, cv::LINE_8);
+    const std::string label =
+      class_names[object.label] + ":" + cv::format("%.2f", object.prob);
+    int baseline = 0;
+    const cv::Size text_size =
+      cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.45, 1, &baseline);
+    const cv::Point text_origin(
+      static_cast<int>(object.rect.x), std::max(12, static_cast<int>(object.rect.y) - 4));
+    cv::rectangle(
+      image,
+      cv::Rect(
+        text_origin.x, text_origin.y - text_size.height, text_size.width,
+        text_size.height + baseline),
+      color, cv::FILLED);
     cv::putText(
-      image, label, cv::Point(obj.rect.tl().x, obj.rect.tl().y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-      cv::Scalar(0, 0, 0));
-    const int radius = 2;  // 绘制关键点
-    const cv::Size & shape = image.size();
-    for (int i = 0; i < NUM_POINTS; ++i) {
-      cv::circle(image, obj.kpt[i], radius, cv::Scalar(255, 255, 0), -1, cv::LINE_AA);
+      image, label, text_origin, cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 0, 0), 1,
+      cv::LINE_AA);
+
+    for (int point = 0; point < NUM_POINTS; ++point) {
+      const cv::Scalar point_color = object.kpt_conf[point] >= keypoint_threshold_
+                                       ? color
+                                       : cv::Scalar(80, 80, 80);
+      cv::circle(image, object.kpt[point], 2, point_color, -1, cv::LINE_AA);
       cv::putText(
-        image, std::to_string(i + 1), obj.kpt[i] + cv::Point2f(5, -5), cv::FONT_HERSHEY_SIMPLEX,
-        0.5, cv::Scalar(255, 255, 0), 1, cv::LINE_AA);
+        image, std::to_string(point), object.kpt[point] + cv::Point2f(4, -4),
+        cv::FONT_HERSHEY_SIMPLEX, 0.35, point_color, 1, cv::LINE_AA);
     }
+    cv::circle(image, rect_center(object.rect), 2, color, -1, cv::LINE_AA);
   }
 
-  /// 计算FPS
-  const float t = (cv::getTickCount() - start) / static_cast<float>(cv::getTickFrequency());
+  const double fps = elapsed_s > 0.0 ? 1.0 / elapsed_s : 0.0;
   cv::putText(
-    image, cv::format("FPS: %.2f", 1.0 / t), cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 2.0,
-    cv::Scalar(255, 0, 0), 2, 8);
-  return object_result;
-}
-
-void YOLO11_BUFF::convert(
-  const cv::Mat & input, cv::Mat & output, const bool normalize, const bool BGR2RGB) const
-{
-  input.convertTo(output, CV_32F);
-  if (normalize) output = output / 255.0;  // 归一化到[0, 1]
-  if (BGR2RGB) cv::cvtColor(output, output, cv::COLOR_BGR2RGB);
-}
-
-float YOLO11_BUFF::fill_tensor_data_image(ov::Tensor & input_tensor, const cv::Mat & input_image) const
-{
-  const ov::Shape tensor_shape = input_tensor.get_shape();
-  // 因为使用了 PPP，tensor_shape 现在是 NHWC 格式，即 [1, 640, 640, 3]
-  const size_t height = tensor_shape[1];
-  const size_t width = tensor_shape[2];
-
-  // 计算缩放因子 (letterbox)
-  const float scale = std::min(height / float(input_image.rows), width / float(input_image.cols));
-  const cv::Matx23f matrix{
-    scale, 0.0, 0.0, 0.0, scale, 0.0,
-  };
-  
-  cv::Mat blob_image;
-  // 直接进行仿射变换缩放
-  cv::warpAffine(input_image, blob_image, matrix, cv::Size(width, height));
-
-  // 【提速核心】：因为预处理已经交给了 OpenVINO，
-  // 这里直接把 uint8_t 的 BGR 像素数据通过 memcpy 内存拷贝进 tensor 即可。
-  // 彻底去掉了原来极其耗时的 3 层 for 循环！
-  uint8_t* input_tensor_data = input_tensor.data<uint8_t>();
-  std::memcpy(input_tensor_data, blob_image.data, blob_image.total() * blob_image.elemSize());
-
-  return 1 / scale;
-}
-
-void YOLO11_BUFF::printInputAndOutputsInfo(const ov::Model & network)
-{
-  std::cout << "model name: " << network.get_friendly_name() << std::endl;
-
-  const std::vector<ov::Output<const ov::Node>> inputs = network.inputs();
-  for (const ov::Output<const ov::Node> & input : inputs) {
-    std::cout << "    inputs" << std::endl;
-
-    const std::string name = input.get_names().empty() ? "NONE" : input.get_any_name();
-    std::cout << "        input name: " << name << std::endl;
-
-    const ov::element::Type type = input.get_element_type();
-    std::cout << "        input type: " << type << std::endl;
-
-    const ov::Shape shape = input.get_shape();
-    std::cout << "        input shape: " << shape << std::endl;
-  }
-
-  const std::vector<ov::Output<const ov::Node>> outputs = network.outputs();
-  for (const ov::Output<const ov::Node> & output : outputs) {
-    std::cout << "    outputs" << std::endl;
-
-    const std::string name = output.get_names().empty() ? "NONE" : output.get_any_name();
-    std::cout << "        output name: " << name << std::endl;
-
-    const ov::element::Type type = output.get_element_type();
-    std::cout << "        output type: " << type << std::endl;
-
-    const ov::Shape shape = output.get_shape();
-    std::cout << "        output shape: " << shape << std::endl;
-  }
-}
-
-void YOLO11_BUFF::save(const std::string & programName, const cv::Mat & image)
-{
-  const std::filesystem::path saveDir = "../result/";
-  if (!std::filesystem::exists(saveDir)) {
-    std::filesystem::create_directories(saveDir);
-  }
-  const std::filesystem::path savePath = saveDir / (programName + ".jpg");
-  cv::imwrite(savePath.string(), image);
+    image, cv::format("FPS: %.2f", fps), cv::Point(20, 40), cv::FONT_HERSHEY_PLAIN, 2.0,
+    cv::Scalar(255, 0, 0), 2, cv::LINE_8);
 }
 }  // namespace auto_buff

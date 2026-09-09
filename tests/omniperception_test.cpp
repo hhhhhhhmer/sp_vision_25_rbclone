@@ -40,8 +40,7 @@ int main(int argc, char * argv[])
     return 0;
   }
 
-  io::Camera::initSDK();
-  
+
   // 全向感知相机（工业相机）
   std::string omnl_yaml_name = cli.get<std::string>("l_cam");
   std::string omnr_yaml_name = cli.get<std::string>("r_cam");

@@ -1,0 +1,167 @@
+# enemy_color: "red"
+enemy_color: "auto"
+
+#####-----神经网络参数-----#####
+yolo_name: trt_0526
+classify_model: ../assets/tiny_resnet.onnx
+yolo11_model_path: ../assets/yolo11.xml
+yolov8_model_path: ../assets/yolov8.xml
+yolov5_model_path: ../assets/yolov5.xml
+trt_engine_path_0526: ../assets/0526.engine  
+device: CPU
+min_confidence: 0.8
+use_traditional: true
+
+#####-----ROI-----#####
+roi: 
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+use_roi: false
+
+#####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+min_confidence: 0.8
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 11
+outpost_max_temp_lost_count: 75
+
+#####-----aimer参数-----#####
+yaw_offset: 0.5 # degree -2.5
+pitch_offset: -3 # degree 2
+far_pitch_offset: 1.7
+comming_angle: 50 # degree
+leaving_angle: 0 # degree
+decision_speed: 8 # rad/s
+high_speed_delay_time: 0.017 # s
+low_speed_delay_time: 0.017 # s
+gimbal_delay: 0.002
+shoot_offset: 2
+
+#####-----shooter参数-----#####
+first_tolerance: 3 # 近距离射击容差，degree
+second_tolerance: 2 # 远距离射击容差，degree
+judge_distance: 2 #距离判断阈值
+auto_fire: true # 是否由自瞄控制射击
+
+camera_name: "hikrobot"
+camera_sn: "DA9492714"
+exposure_us: 8000
+gain: 1
+vid_pid: "2bdf:0001"
+img_gamma: 1
+flip: false
+mirror: false
+timestamp_offset_us: 2000 #us
+
+# camera_name: "daheng"
+# camera_sn: "FDN24040486"
+# exposure_us: 3000
+# gain: 0.5
+# gamma: 0.7
+# vid_pid: "2ba2:4d55"
+# flip: true
+# mirror: true
+# timestamp_offset_us: 2000 #us
+
+# -1  0  0
+#  0 -1  0
+#  0  0  1
+# R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, -1]
+
+# 相机同理想情况的偏角: yaw-0.42 pitch-0.75 roll-0.42 degree
+# 标定板到世界坐标系原点的水平距离: 2.43 m
+# 标定板同竖直摆放时的偏角: yaw-108.92 pitch11.03 roll-178.90 degree
+R_camera2gimbal: [0.03315412293890431, 0.066448175830149545, -0.99723891022211786, 0.9989414312309729, -0.034037700850800691, 0.030942719515362441, -0.031887632435899101, -0.9972091429833746, -0.067506325985022042]
+t_camera2gimbal: [-0.22497965360569472, 0.050034361395451157, -0.037937378585623613]
+# 重投影误差: 0.0883px
+camera_matrix: [2415.7232987232951, 0, 702.61960986891495, 0, 2409.4918852673031, 580.76235139241203, 0, 0, 1]
+distort_coeffs: [-0.02984771810493294, 0.30477203925055285, 0.0026222323681228195, -3.2767925828628592e-05, -0.67499512547179619]
+# _camera2gimbal第一位调yaw
+# _camera2gimbal第二位调yaw
+# _camera2gimbal第三位调pitch
+#####-----cboard参数-----#####
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xff
+can_interface: "can0"
+
+#####-----gimbal参数-----#####
+com_port: "/dev/ttyCH343USB0"
+# 陀螺仪是否装错, 编号012分别代表电控坐标系ypr，想换旋转轴只需要对编号进行互换即可，负号就是对当前值取负，交换完再取负
+# 上车前记得对齐电控坐标系和济瞄惯性系
+gimbal_y1: 1
+gimbal_p2: 3
+gimbal_r3: -2
+# 济瞄的惯性系  z轴往上, x轴是枪管指向
+#     x  z
+#      \ |
+#       \|
+# y_ _ _ 0   z:yaw   x:roll   y:pitch
+
+#####-----planner-----#####
+target_dist_error: -0.23
+target_h_error: 0.28
+fire_thresh: 0.003
+small_armor_tolerance: 0.12
+big_armor_tolerance: 0.22
+tower_and_base_armor_tolerance_: 0.10  # 26赛季前哨站和基地装甲板检测宽度
+gimbal_control_delay: 0.022 #0.08
+tower_pitch_prediction_time: 0.05
+
+max_yaw_acc: 80
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+
+max_pitch_acc: 100
+Q_pitch: [9e6,0]
+R_pitch: [1]
+
+#####-----buff_detector参数-----#####
+detect:
+  contrast: 1
+  brightness: 
+    blue: -120
+    red: -100
+  brightness_threshold:
+    blue: 120
+    red: 40
+  morphology_size:
+    blue: 3
+    red: 3
+  dilate_size: 2
+  # canny_low_threshold: 100
+  # canny_high_threshold: 180
+  # approx_epsilon: 1.0
+  R_contours_min_area: 200
+  R_contours_max_area: 600
+  fanblades_head_contours_min_area: 3000
+  fanblades_head_contours_max_area: 8000
+  fanblades_body_contours_min_area: 1000
+  fanblades_body_contours_max_area: 4000
+  standard_fanblade_path: ./assets/standard_fanblade.jpg
+
+model: "../assets/yolo11_buff_int8.xml"
+#####-----buff_aimer参数-----#####
+aim_time: 0.150         # s
+wait_time: 0.300        # s
+command_fire_gap: 0.080 # s
+fire_gap_time: 0.700   # s
+predict_time: 0.120    # s
+
+pattern_cols: 11      # 棋盘格每行的内角点数（格子数-1）
+pattern_rows: 8      # 棋盘格每列的内角点数（格子数-1）
+square_size_mm: 30   # 棋盘格方块大小（毫米）

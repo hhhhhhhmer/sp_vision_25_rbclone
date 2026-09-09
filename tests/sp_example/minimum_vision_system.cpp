@@ -11,6 +11,7 @@
 #include "tasks/auto_aim/tracker.hpp"
 #include "tools/exiter.hpp"
 #include "tools/img_tools.hpp"
+#include "tools/reprojection.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
@@ -96,23 +97,9 @@ int main(int argc, char * argv[])
       auto target = targets.front();
       tools::draw_text(img, fmt::format("[{}]", tracker.state()), {10, 30}, {255, 255, 255});
 
-      // 当前帧target更新后
-      std::vector<Eigen::Vector4d> armor_xyza_list = target.armor_xyza_list();
-      for (const Eigen::Vector4d & xyza : armor_xyza_list) {
-        auto image_points =
-          solver.reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
-        tools::draw_points(img, image_points, {0, 255, 0});
-      }
-
-      // aimer瞄准位置
       auto aim_point = aimer.debug_aim_point;
-      Eigen::Vector4d aim_xyza = aim_point.xyza;
-      auto image_points =
-        solver.reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
-      if (aim_point.valid)
-        tools::draw_points(img, image_points, {0, 0, 255});  // red
-      else
-        tools::draw_points(img, image_points, {255, 0, 0});  // blue
+      const cv::Scalar aim_color = aim_point.valid ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);
+      tools::draw_reprojection(img, solver, target, aim_point.xyza, {0, 255, 0}, aim_color);
 
       // 观测器内部数据
       Eigen::VectorXd x = target.ekf_x();

@@ -11,7 +11,7 @@
 
 const std::string keys =
   "{help h usage ? |                          | 输出命令行参数说明}"
-  "{config-path c  | ../configs/calibration.yaml | yaml配置文件路径 }"
+  "{config-path c  | ../configs/mouse.yaml | yaml配置文件路径 }"
   "{@input-folder  | ../assets/img_with_q        | 输入文件夹路径   }";
 
 // 生成棋盘格角点的3D坐标

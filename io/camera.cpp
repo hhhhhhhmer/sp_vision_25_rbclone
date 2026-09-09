@@ -9,9 +9,11 @@
 
 namespace io
 {
-void Camera::initSDK(){
+void Camera::initSDK()
+{
   DahengCamera::initSDK();
 }
+
 Camera::Camera(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);

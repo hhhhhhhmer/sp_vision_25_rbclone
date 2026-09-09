@@ -11,20 +11,37 @@ namespace io
 Gimbal::Gimbal(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
-  auto com_port = tools::read<std::string>(yaml, "com_port");
+  const auto com_port = yaml["com_port"];
+  if (!com_port) {
+    tools::logger()->error("[YAML] com_port not found!");
+    exit(1);
+  }
+
+  try {
+    if (com_port.IsScalar()) {
+      com_ports_.push_back(com_port.as<std::string>());
+    } else if (com_port.IsSequence()) {
+      com_ports_ = com_port.as<std::vector<std::string>>();
+    }
+  } catch (const YAML::Exception & e) {
+    tools::logger()->error("[Gimbal] Invalid com_port config: {}", e.what());
+    exit(1);
+  }
+
+  if (com_ports_.empty()) {
+    tools::logger()->error("[Gimbal] com_port must be a serial port or a non-empty list.");
+    exit(1);
+  }
 
   this->gimbal_yaw2vision = tools::read<int>(yaml, "gimbal_y1");
   this->gimbal_pitch2vision = tools::read<int>(yaml, "gimbal_p2");
   this->gimbal_roll2vision = tools::read<int>(yaml, "gimbal_r3");
 
-  try {
-    serial_.setPort(com_port);
-    serial_.setBaudrate(460800);
-    auto timeout = serial::Timeout::simpleTimeout(2); 
-    serial_.setTimeout(timeout);
-    serial_.open();
-  } catch (const std::exception & e) {
-    tools::logger()->error("[Gimbal] Failed to open serial: {}", e.what());
+  serial_.setBaudrate(460800);
+  auto timeout = serial::Timeout::simpleTimeout(2);
+  serial_.setTimeout(timeout);
+  if (!open_serial()) {
+    tools::logger()->error("[Gimbal] Failed to open all configured serial ports.");
     exit(1);
   }
 
@@ -72,34 +89,13 @@ std::string Gimbal::str(GimbalMode mode) const
 Eigen::Quaterniond Gimbal::q(std::chrono::steady_clock::time_point t)
 {
   while (true) {
-    // 1. 阻塞等待并弹出队列中最老的一帧数据
     auto [q_a, t_a] = queue_.pop();
-
-    // 2. 防死锁核心：如果弹出后队列空了，绝对不能再去调用 front()！
-    // 否则 front() 会永久阻塞等待下一个数据导致画面卡死。
-    // 此时直接返回当前唯一可用的数据即可。
-    // if (queue_.empty()) {
-    //   return q_a;
-    // }
-
-    // 3. 此时队列非空，可以安全地偷看（不弹出）下一个数据，绝不会阻塞
-    auto [q_b, t_b] = queue_.front(); 
-
-    // 4. 如果请求时间比插值终点还要晚，说明 q_a 已经没有保留价值了
-    // 丢弃 q_a，在下一轮循环中让 q_b 成为新的起点
-    // if (t > t_b) {
-    //   continue; 
-    // }
-
-    // 5. 正常的时间戳线性插值
+    auto [q_b, t_b] = queue_.front();
     auto t_ab = tools::delta_time(t_a, t_b);
     auto t_ac = tools::delta_time(t_a, t);
     auto k = t_ac / t_ab;
     Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
-    
     if (t < t_a) return q_c;
-    
-    // 此时 t 一定在 (t_a, t_b] 区间内
     if (!(t_a < t && t <= t_b)) continue;
 
     return q_c;
@@ -122,6 +118,26 @@ void Gimbal::sb_send(io::sb_VisionToGimbal VisionToGimbal)
   try {
     // 2. 这里的底层缓冲必须是 sb_tx_data_，不能是 tx_data_ ！
     serial_.write(reinterpret_cast<uint8_t *>(&sb_tx_data_), sizeof(sb_tx_data_));
+  } catch (const std::exception & e) {
+    tools::logger()->warn("[Gimbal] Failed to write serial: {}", e.what());
+  }
+}
+
+void Gimbal::omni_send(const io::OmniVisionToGimbal & VisionToGimbal)
+{
+  omni_send(
+    VisionToGimbal.mode, VisionToGimbal.yaw, VisionToGimbal.pitch, VisionToGimbal.distance);
+}
+
+void Gimbal::omni_send(uint8_t mode, float yaw, float pitch, float distance)
+{
+  omni_tx_data_.mode = mode;
+  omni_tx_data_.yaw = yaw;
+  omni_tx_data_.pitch = pitch;
+  omni_tx_data_.distance = distance;
+
+  try {
+    serial_.write(reinterpret_cast<const uint8_t *>(&omni_tx_data_), sizeof(omni_tx_data_));
   } catch (const std::exception & e) {
     tools::logger()->warn("[Gimbal] Failed to write serial: {}", e.what());
   }
@@ -216,8 +232,28 @@ bool Gimbal::read(uint8_t * buffer, size_t size)
     return serial_.read(buffer, size) == size;
   } catch (const std::exception & e) {
     tools::logger()->warn("[Gimbal] Failed to read serial: {}", e.what());
+    try {
+      serial_.close();
+    } catch (...) {
+    }
     return false;
   }
+}
+
+bool Gimbal::open_serial()
+{
+  for (const auto & port : com_ports_) {
+    try {
+      if (serial_.isOpen()) serial_.close();
+      serial_.setPort(port);
+      serial_.open();
+      tools::logger()->info("[Gimbal] Opened serial port: {}", port);
+      return true;
+    } catch (const std::exception & e) {
+      tools::logger()->warn("[Gimbal] Failed to open serial port {}: {}", port, e.what());
+    }
+  }
+  return false;
 }
 
 void Gimbal::read_thread()
@@ -226,9 +262,9 @@ void Gimbal::read_thread()
   int error_count = 0;
 
   while (!quit_) {
-    if (error_count > 50000) {
+    if (!serial_.isOpen() || error_count > 50000) {
       error_count = 0;
-      tools::logger()->warn("[Gimbal] Too many errors, attempting to reconnect...");
+      tools::logger()->warn("[Gimbal] Serial unavailable, attempting to reconnect...");
       reconnect();
       continue;
     }
@@ -330,13 +366,12 @@ void Gimbal::reconnect()
     } catch (...) {
     }
 
-    try {
-      serial_.open();  // 尝试重新打开
+    if (open_serial()) {
       queue_.clear();
-      tools::logger()->info("[Gimbal] Reconnected serial successfully.");
+      tools::logger()->info("[Gimbal] Reconnected serial successfully on {}.", serial_.getPort());
       break;
-    } catch (const std::exception & e) {
-      tools::logger()->warn("[Gimbal] Reconnect failed: {}", e.what());
+    } else {
+      tools::logger()->warn("[Gimbal] Reconnect attempt failed on all configured ports.");
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   }

@@ -120,9 +120,11 @@ int main(int argc, char * argv[])
 
       Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
-      auto power_runes = buff_detector.detect(img);
-
-      buff_solver.solve(power_runes);
+      const auto buff_mode = mode.load() == io::GimbalMode::BIG_BUFF
+                               ? auto_buff::BuffMode::BIG
+                               : auto_buff::BuffMode::SMALL;
+      auto buff_observations = buff_detector.detect_tracks(img, buff_mode, t);
+      auto power_runes = buff_solver.solve_all(buff_observations);
 
       auto_aim::Plan buff_plan;
       if (mode.load() == io::GimbalMode::SMALL_BUFF) {

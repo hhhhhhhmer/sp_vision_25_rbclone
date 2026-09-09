@@ -6,6 +6,7 @@
 #include <Eigen/Dense>
 #include <chrono>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include "../auto_aim/planner/planner.hpp"
@@ -29,6 +30,8 @@ public:
     Target & target, std::chrono::steady_clock::time_point & timestamp, io::GimbalState gs,
     bool to_now = true);
 
+  const Target * predicted_target() const { return predicted_target_.get(); }
+
   double angle;      ///
   double t_gap = 0;  ///
 
@@ -40,11 +43,8 @@ private:
   double fire_gap_time_;
   double predict_time_;
 
-  int mistake_count_ = 0;
-  bool switch_fanblade_;
-
-  double last_yaw_ = 0;
-  double last_pitch_ = 0;
+  bool solution_converged_ = false;
+  std::unique_ptr<Target> predicted_target_;
 
   // for mpc
   bool first_in_aimer_ = true;
@@ -53,7 +53,7 @@ private:
 
   bool get_send_angle(
     auto_buff::Target & target, const double predict_time, const double bullet_speed,
-    const bool to_now, double & yaw, double & pitch);
+    const bool to_now, double & yaw, double & pitch, bool save_prediction = false);
 };
 }  // namespace auto_buff
 #endif  // AUTO_AIM__AIMER_HPP

@@ -2,6 +2,9 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
 #include <vector>
 
 #include "tools/logger.hpp"
@@ -49,6 +52,44 @@ void Solver::set_R_gimbal2world(const Eigen::Quaterniond & q)
 {
   Eigen::Matrix3d R_imubody2imuabs = q.toRotationMatrix();
   R_gimbal2world_ = R_gimbal2imubody_.transpose() * R_imubody2imuabs * R_gimbal2imubody_;
+}
+
+void Solver::set_R_gimbal2world_from_tf(const Eigen::Quaterniond & q)
+{
+  if (!q.coeffs().allFinite() || q.norm() < 1e-9) {
+    throw std::invalid_argument("Invalid gimbal-to-world quaternion from ROS TF");
+  }
+  R_gimbal2world_ = q.normalized().toRotationMatrix();
+}
+
+void Solver::set_camera_calibration(
+  const Eigen::Matrix3d & camera_matrix, const std::vector<double> & distort_coeffs)
+{
+  if (!camera_matrix.allFinite() || camera_matrix(0, 0) <= 0 || camera_matrix(1, 1) <= 0) {
+    throw std::invalid_argument("Invalid camera matrix from ROS CameraInfo");
+  }
+  if (!std::all_of(distort_coeffs.begin(), distort_coeffs.end(), [](double value) {
+        return std::isfinite(value);
+      })) {
+    throw std::invalid_argument("Invalid distortion coefficients from ROS CameraInfo");
+  }
+
+  cv::eigen2cv(camera_matrix, camera_matrix_);
+  if (distort_coeffs.empty()) {
+    distort_coeffs_ = cv::Mat();
+  } else {
+    distort_coeffs_ = cv::Mat(distort_coeffs).reshape(1, 1).clone();
+  }
+}
+
+void Solver::set_camera2gimbal(
+  const Eigen::Matrix3d & R_camera2gimbal, const Eigen::Vector3d & t_camera2gimbal)
+{
+  if (!R_camera2gimbal.allFinite() || !t_camera2gimbal.allFinite()) {
+    throw std::invalid_argument("Invalid camera-to-gimbal transform from ROS TF");
+  }
+  R_camera2gimbal_ = R_camera2gimbal;
+  t_camera2gimbal_ = t_camera2gimbal;
 }
 
 //solvePnP（获得姿态）

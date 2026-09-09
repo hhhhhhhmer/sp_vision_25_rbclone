@@ -19,6 +19,7 @@
 #include "tools/recorder.hpp"
 #include "tools/yaml.hpp"
 #include "tools/img_tools.hpp"
+#include "tools/reprojection.hpp"
 
 #include "method_set/binocular_aim.hpp"
 
@@ -109,95 +110,10 @@ int main(int argc, char * argv[])
     last_t = std::chrono::steady_clock::now();
     tools::logger()->info("fps:: {:.2f}", fps);
      
-    // // 自瞄模式
-    // if (!targets.empty()) {
-    //     // 将目标放入队列供MPC线程处理
-    //     target_queue.push(targets.front());
-        
-    //     auto& target = targets.front();
-        
-    //         // 获取EKF状态向量
-    //     Eigen::VectorXd ekf_x = target.getEKFXest();
-        
-    //     // 1. 计算旋转中心的世界坐标
-    //     // EKF状态: [x, vx, y, vy, z, vz, angle, w, r, l, h]
-    //     // 旋转中心: (x, y, z) = (ekf_x[0], ekf_x[2], ekf_x[4])
-    //     Eigen::Vector3d center_world(ekf_x[0], ekf_x[2], ekf_x[4]);
-        
-    //     // 2. 计算速度终点（预测0.5秒后的位置）
-    //     double dt = 0.5; // 预测时间
-    //     double scale_factor = 1.0; // 放大2倍
-    //     Eigen::Vector3d velocity(ekf_x[1], ekf_x[3], ekf_x[5]);
-    //     Eigen::Vector3d pred_center = center_world + velocity * dt * scale_factor ;
-        
-    //     // 3. 计算角速度方向终点
-    //     double w = ekf_x[7]; // 角速度
-    //     Eigen::Vector3d v_yaw_axis_tvec = center_world;
-    //     v_yaw_axis_tvec[2] += w * 0.1; // 在y方向加上角速度的影响
+    // tools::draw_reprojection(
+    //   img, *bincameras.solvers.aim_ptr, targets.front(),
+    //   bincameras.planners.aim_ptr->debug_xyza);
 
-    //     double speed_magnitude = std::sqrt(ekf_x[1]*ekf_x[1] + ekf_x[3]*ekf_x[3] + ekf_x[5]*ekf_x[5]);
-
-
-    //     // std::cout << "角速度大小: " << w * 57.3 << " °/s" << std::endl;
-    //     // 5. 输出速度大小到控制台
-    //     // std::cout << "速度大小: " << speed_magnitude << " m/s" << std::endl;
-        
-    //     // 4. 将世界坐标转换为图像坐标
-    //     // 这里需要将世界坐标转换为相机坐标，然后再投影到图像
-    //     // 假设solver有一个将世界坐标转换为图像坐标的函数
-    //     // 如果没有，你可以创建一个简单的投影函数
-        
-    //     // 方法1: 如果solver有直接投影点的函数
-    //     // auto center_img = solver.reproject_point(center_world);
-    //     // auto pred_point_img = solver.reproject_point(pred_center);
-    //     // auto v_yaw_axis_point_img = solver.reproject_point(v_yaw_axis_tvec);
-        
-    //     // 方法2: 使用reproject_armor函数（需要一个虚拟的装甲板）
-    //     // 这里假设我们有一个虚拟装甲板用于投影
-    //     auto center_img = bincameras.solvers.aim_ptr->reproject_armor(center_world, 0.0, target.armor_type, target.name);
-    //     auto pred_point_img = bincameras.solvers.aim_ptr->reproject_armor(pred_center, 0.0, target.armor_type, target.name);
-    //     auto v_yaw_axis_point_img = bincameras.solvers.aim_ptr->reproject_armor(v_yaw_axis_tvec, 0.0, target.armor_type, target.name);
-        
-    //     // 5. 绘制速度和角速度方向
-    //     if (!center_img.empty() && !pred_point_img.empty()) {
-    //         // 绘制旋转中心
-    //         cv::circle(img, center_img[0], 5, cv::Scalar(51, 153, 237), -1);
-            
-    //         // 绘制预测点（速度方向）
-    //         cv::circle(img, pred_point_img[0], 8, cv::Scalar(0, 0, 255), -1);
-            
-    //         // 绘制速度方向线
-    //         cv::line(img, center_img[0], pred_point_img[0], cv::Scalar(0, 255, 255), 2);
-            
-    //         // 绘制角速度方向线
-    //         if (!v_yaw_axis_point_img.empty()) {
-    //         cv::line(img, center_img[0], v_yaw_axis_point_img[0], cv::Scalar(0, 255, 0), 2);
-    //         }
-    //     }
-    //     // bincameras.ChangeTheScope(targets.front(), tracker);
-    // } else {
-    //     target_queue.push(std::nullopt);
-    // }
-
-
-    // if (!targets.empty()) {
-    //   auto target = targets.front();
-
-    //   // 当前帧target更新后
-    //   std::vector<Eigen::Vector4d> armor_xyza_list = target.armor_xyza_list();
-    //   for (const Eigen::Vector4d & xyza : armor_xyza_list) {
-    //     auto image_points =
-    //       bincameras.solvers.aim_ptr->reproject_armor(xyza.head(3), xyza[3], target.armor_type, target.name);
-    //     tools::draw_points(img, image_points, {0, 255, 0});
-    //   }
-
-    //   Eigen::Vector4d aim_xyza = bincameras.planners.aim_ptr->debug_xyza;
-    //   auto image_points =
-    //     bincameras.solvers.aim_ptr->reproject_armor(aim_xyza.head(3), aim_xyza[3], target.armor_type, target.name);
-    //   tools::draw_points(img, image_points, {0, 0, 255});
-    // }
-
-    
     cv::resize(img, img, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
     cv::imshow("reprojection", img);
     auto key = cv::waitKey(1);

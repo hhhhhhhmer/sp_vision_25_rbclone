@@ -1,0 +1,214 @@
+pattern_cols: 11      # 棋盘格每行的内角点数（格子数-1）
+pattern_rows: 8      # 棋盘格每列的内角点数（格子数-1）
+square_size_mm: 30   # 棋盘格方块大小（毫米）
+
+# enemy_color: "blue"
+# enemy_color: "red"
+enemy_color: "auto"
+
+#####-----神经网络参数-----#####
+yolo_name: yolov8
+classify_model: ../assets/tiny_resnet.onnx
+yolo11_model_path: ../assets/yolo11.xml
+yolov8_model_path: ../assets/yolov8.xml
+yolov5_model_path: ../assets/yolov5.xml
+tensorrt_engine_path: ../assets/0708_int8_calib.engine
+# tensorrt_engine_path: ../assets/0708_fp16_super.engine
+device: CPU
+min_confidence: 0.5
+use_traditional: true
+
+#####-----ROI-----#####
+roi: 
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+use_roi: false
+
+# #####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 832
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+# min_confidence: 0.8
+
+# rv识别
+number_classifier:
+  model_path: "../assets/rv_model/mlp.onnx"   # 模型路径 (确保文件存在)
+  label_path: "../assets/rv_model/label.txt"  # 标签文件路径
+  threshold: 0.5                 # 数字分类阈值
+  ignore_classes: ["negative"]   # 忽略的类别
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 11
+outpost_max_temp_lost_count: 75
+
+
+#####-----aimer参数-----##### 12mm
+yaw_offset: 0.73 # degree -2.5
+pitch_offset: 1.7 # degree 2
+far_pitch_offset: 1.7
+comming_angle: 60 # degree
+leaving_angle: 20 # degree
+decision_speed: 8 # rad/s
+high_speed_delay_time: 0.015 # s   远 0.25
+low_speed_delay_time: 0.015 # s    远 0.25
+gimbal_delay: 0.00
+shoot_offset: 2
+
+#####-----shooter参数-----#####
+first_tolerance: 3 # 近距离射击容差，degree
+second_tolerance: 2 # 远距离射击容差，degree          
+judge_distance: 2 #距离判断阈值
+auto_fire: true # 是否由自瞄控制射击
+
+# #12mm camera
+# camera_name: "hikrobot"
+# camera_sn: "DA7188447"
+# exposure_us: 5000
+# gain: 0.7
+# vid_pid: "2bdf:0001"
+# flip: true
+# mirror: true
+# timestamp_offset_us: 1000 #uspy8
+
+# 6mm camera
+camera_name: "daheng"
+camera_sn: "KE0210030295"
+exposure_us: 12000
+gain: 0.7
+gamma: 1      
+img_gamma: 1
+vid_pid: "2bdf:0001"
+flip: true
+mirror: true
+timestamp_offset_us: 4318 #us 2300
+
+# camera_name: "daheng"
+# camera_sn: "FDN24040486"
+# exposure_us: 4000
+# gain: 0.5
+# gamma: 0.5
+# vid_pid: "2ba2:4d55"
+# flip: true
+# mirror: true
+# timestamp_offset_us: 1000 #us
+
+# -1  0  0
+#  0 -1  0
+#  0  0  1
+# R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
+# R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
+
+#6mm camera
+R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
+
+# 重投影误差: 0.0832px
+camera_matrix: [1284.7904823206616, 0, 625.3390082575879, 0, 1284.3534116242304, 499.756410904147, 0, 0, 1]
+distort_coeffs: [-0.0750454909763737, 0.1498849701480074, 0.0004963244831437462, -3.867001639218003e-05, -0.038089791852694295]
+# 相机同理想情况的偏角: yaw0.52 pitch-1.50 roll-4.00 degree
+# 标定板到世界坐标系原点的水平距离: 1.57 m
+# 标定板同竖直摆放时的偏角: yaw82.07 pitch15.41 roll-0.97 degree
+R_camera2gimbal: [-0.0073103512093771455, -0.02682918605501885, 0.9996133020027401, -0.99754399716833, -0.06944124567154426, -0.009158990829531274, 0.06966012114995743, -0.9972252043421335, -0.026255653603820702]
+t_camera2gimbal: [0.12086136238352153, 0.03479496505655587, 0.037380967871420756]
+# reprojection error: 0.115 px
+
+# _camera2gimbal第一位调yaw
+# _camera2gimbal第二位调yaw
+# _camera2gimbal第三位调pitch
+
+# #12mm camera
+# # 重投影误差: 0.0601px 12mm
+# camera_matrix: [3575.595557186291, 0, 660.6522530192485, 0, 3548.6107025779365, 630.7246558819783, 0, 0, 1]
+# distort_coeffs: [0.007593315540968868, -0.09500492030732975, 0.005121307769025103, -0.0003827026956162613, 3.422331685386428]
+# # # 相机同理想情况的偏角: yaw-3.03 pitch0.26 roll0.84 degree
+# # # 标定板到世界坐标系原点的水平距离: 3.39 m
+# # # 标定板同竖直摆放时的偏角: yaw10.51 pitch6.93 roll-1.85 degree
+# R_camera2gimbal: [0.05293871277740374, 0.003752714924705188, 0.9985907118635569, -0.9984910777682651, 0.01481590044 15254, 0.052877752515340645, -0.014596585444543545, -0.9998831962907464, 0.004531387068098422]
+# t_camera2gimbal: [0.19936918316981864, 0.031528539583439465, 0.003809688002070062]
+#####-----cboard参数-----#####
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xff
+can_interface: "can0"
+
+#####-----gimbal参数-----#####
+com_port: "/dev/ttyACM1"
+# 陀螺仪是否装错, 编号012分别代表电控坐标系ypr，想换旋转轴只需要对编号进行互换即可，负号就是对当前值取负，交换完再取负
+# 上车前记得对齐电控坐标系和济瞄惯性系
+gimbal_y1: 1
+gimbal_p2: 2
+gimbal_r3: 3
+# 济瞄的惯性系  z轴往上, x轴是枪管指向
+#     x  z
+#      \ |
+#       \|
+# y_ _ _ 0   z:yaw   x:roll   y:pitch
+
+
+#####-----planner-----#####
+target_dist_error: 0
+target_h_error: 0
+fire_thresh: 0.003 # 
+small_armor_tolerance: 0.12
+big_armor_tolerance: 0.22
+tower_and_base_armor_tolerance_: 0.10  # 26赛季前哨站和基地装甲板检测宽度
+gimbal_control_delay: 0.0
+tower_pitch_prediction_time: 0.05
+
+max_yaw_acc: 50
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+
+max_pitch_acc: 100
+Q_pitch: [9e6,0]
+R_pitch: [1]
+
+#####-----buff_detector参数-----#####
+detect:
+  contrast: 1
+  brightness: 
+    blue: -120
+    red: -100
+  brightness_threshold:
+    blue: 120
+    red: 40
+  morphology_size:
+    blue: 3
+    red: 3
+  dilate_size: 2
+  # canny_low_threshold: 100
+  # canny_high_threshold: 180
+  # approx_epsilon: 1.0
+  R_contours_min_area: 200
+  R_contours_max_area: 600
+  fanblades_head_contours_min_area: 3000
+  fanblades_head_contours_max_area: 8000
+  fanblades_body_contours_min_area: 1000
+  fanblades_body_contours_max_area: 4000
+  standard_fanblade_path: ./assets/standard_fanblade.jpg
+
+model: "/home/cyn/Desktop/sp_vision_25_rbclone/yolo_buff/runs/pose/runs/rune_pose/yolo11n_rune/weights/best.onnx"
+buff_confidence_threshold: 0.7
+buff_keypoint_threshold: 0.3
+buff_rune_radius_m: 0.700
+buff_locked_gate_deg: 25
+buff_switch_gate_deg: 10
+buff_switch_confirm_frames: 3
+buff_locked_lost_max: 6
+#####-----buff_aimer参数-----#####
+aim_time: 0.150         # s
+wait_time: 0.300        # s
+command_fire_gap: 0.080 # s
+fire_gap_time: 0.700   # s
+predict_time: 0.120    # s
+
+

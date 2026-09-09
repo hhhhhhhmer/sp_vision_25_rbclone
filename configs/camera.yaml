@@ -14,10 +14,10 @@
 # mirror: true
 # timestamp_offset_us: 1000 #us
 
-camera_name: "daheng"
-camera_sn: "FDN21050087" #KE0210030295 #FDN21050087
-exposure_us: 8000
-gain: 0.5
+camera_name: "hikrobot"                                   
+camera_sn: "DA7188471"  
+exposure_us: 2500
+gain: 0.8
 gamma: 0.5
 img_gamma: 0.5
 vid_pid: "2ba2:4d55"

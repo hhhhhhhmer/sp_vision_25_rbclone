@@ -4,12 +4,13 @@
 
 #ifdef TENSOR_RT_MAKE
 #include "trt_yolos/trt_yolo_0708.hpp"
+#include "trt_yolos/trt_yolo_0526.hpp"
 #endif
 
 #ifdef OPENVINO_MAKE
-#include "yolos/yolo11.hpp"
-#include "yolos/yolov5.hpp"
-#include "yolos/yolov8.hpp"
+#include "ov_yolos/yolo11.hpp"
+#include "ov_yolos/yolov5.hpp"
+#include "ov_yolos/yolov8.hpp"
 #endif
 
 
@@ -32,6 +33,10 @@ YOLO::YOLO(const std::string & config_path, bool debug)
   else if (yolo_name == "yolov5") {
     yolo_ = std::make_unique<YOLOV5>(config_path, debug);
   }
+  else if (yolo_name == "ov_0526") {
+    yolo_ = std::make_unique<YOLOV5>(config_path, debug);
+  }
+
 
   else {
     throw std::runtime_error("Unknown yolo name: " + yolo_name + "!");
@@ -41,7 +46,10 @@ YOLO::YOLO(const std::string & config_path, bool debug)
 
   #ifdef TENSOR_RT_MAKE
   if (yolo_name == "trt_0708") {
-      yolo_ = std::make_unique<TensorRTYolo>(config_path, debug);
+      yolo_ = std::make_unique<TensorRTYolo0708>(config_path, debug);
+  }
+  else if (yolo_name == "trt_0526") {          // 新增分支
+      yolo_ = std::make_unique<TensorRTYolo0526>(config_path, debug);
   }
 
   else {
@@ -53,6 +61,10 @@ YOLO::YOLO(const std::string & config_path, bool debug)
 std::list<Armor> YOLO::detect(const cv::Mat & img, int frame_count)
 {
   return yolo_->detect(img, frame_count);
+}
+
+YOLOFrameData YOLO::detect(YOLOFrameData frame_data, int frame_count){
+  return yolo_->detect(frame_data, frame_count);
 }
 
 std::list<Armor> YOLO::postprocess(

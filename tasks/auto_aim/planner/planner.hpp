@@ -53,13 +53,13 @@ public:
     if (!target.has_value()) return {false};
 
     double delay_time =
-      std::abs(target->ekf_x()[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
+      (std::abs(target->ekf_x()[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_) + gimbal_delay_;
 
     if(std::abs(target->ekf_x()[7]) > decision_speed_) tools::logger()->warn("std::abs(target->ekf_x()[7]) > {}", decision_speed_);
 
-
     auto future = std::chrono::steady_clock::now() + std::chrono::microseconds(int(delay_time * 1e6));
-    
+    is_far = false;
+    is_high = false;
     
     target->predict(future);
 
@@ -67,21 +67,16 @@ public:
     {
     case Dynamics:
       return plan(*target, bullet_speed);
-      break;
     case rbSuppressiveFire:
       return rbplan(*target, bullet_speed, gimbal_yaw);
-      break;
     case rbHero:
       return rbHeroplan(*target, bullet_speed, gimbal_yaw);
-      break;
-      case SB:
+    case SB:
       return sbplan(*target, bullet_speed, gimbal_yaw);
     default:
-      // tools::logger()->warn("planner model error!");
-      break;
+      tools::logger()->error("Unknown shoot strategy: {}", static_cast<int>(strategy));
+      return {false};
     }
-    
-    
   }
   Plan rbplan(Target target, double bullet_speed, double gimbal_yaw);
   Plan sbplan(Target target, double bullet_speed, double gimbal_yaw);
@@ -89,9 +84,11 @@ public:
   Plan rbHeroplan(Target target, double bullet_speed, double gimbal_yaw); 
 private:
   bool is_far = false;
+  bool is_high = false;
   double yaw_offset_;
   double pitch_offset_;
   double far_pitch_offset_;
+  double far_high_pitch_offset_;
   double fire_thresh_;
   double target_dist_error_, target_h_error_;
   double low_speed_delay_time_, high_speed_delay_time_, decision_speed_;
@@ -117,6 +114,10 @@ private:
 
   std::chrono::steady_clock::time_point outpost_z_stable_start_time_;
   bool outpost_is_make = true;
+
+  double gimbal_delay_;
+
+  int shoot_offset_;
 };
 
 }  // namespace auto_aim

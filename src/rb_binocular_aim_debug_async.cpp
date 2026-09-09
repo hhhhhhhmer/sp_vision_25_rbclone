@@ -119,7 +119,8 @@ int main(int argc, char * argv[])
         std::lock_guard<std::mutex> lock(planner_mutex);
         plan = planner.plan(
           target, gs.bullet_speed, gs.yaw,
-          auto_aim::Planner::ShootStrategy::rbSuppressiveFire);
+          auto_aim::Planner::ShootStrategy::rbSuppressiveFire, gs.pitch, gs.yaw_vel,
+          gs.pitch_vel);
       }
 
     //    if (binocular_aim.force_control_frames > 0) {

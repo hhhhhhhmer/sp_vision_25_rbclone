@@ -124,7 +124,7 @@ int main(int argc, char * argv[])
         //MPC预测以及+自家火控
         // auto_aim::Planner * plan_short_or_long = target->cam_is_short ? &bincameras.planners.short_aim : &bincameras.planners.long_aim;
         auto_aim::Planner * plan_short_or_long = &short_camera_planner;
-        auto plan =  plan_short_or_long->plan(target, gs.bullet_speed, gs.yaw,  auto_aim::Planner::ShootStrategy::SB);
+        auto plan =  plan_short_or_long->plan(target, gs.bullet_speed, gs.yaw,  auto_aim::Planner::ShootStrategy::SB, gs.pitch, gs.yaw_vel, gs.pitch_vel);
         // 1. 设置默认值
         uint8_t name = 0;
         float tx = 0.0f;

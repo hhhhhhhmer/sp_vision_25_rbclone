@@ -195,6 +195,12 @@ add_test(NAME thread_pool_test COMMAND thread_pool_test)
 
 add_executable(plotter_replay tools/plotter_replay.cpp tools/plotter.cpp)
 
+add_executable(gimbal_calib tools/gimbal_calib.cpp)
+target_link_libraries(gimbal_calib ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
+
+add_executable(rbplan_smoke_test tests/rbplan_smoke_test.cpp)
+target_link_libraries(rbplan_smoke_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+
 add_executable(plotter_test tests/plotter_test.cpp tools/plotter.cpp)
 add_test(NAME plotter_test COMMAND plotter_test)
 

@@ -8,6 +8,9 @@
 
 namespace io
 {
+/** @brief yaw/pitch 角速度估计的一阶平滑时间常数（s）；按 dt 折算，不随反馈频率变化 */
+constexpr double kVelFilterTauS = 0.02;
+
 Gimbal::Gimbal(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
@@ -68,6 +71,12 @@ GimbalState Gimbal::state() const
 {
   std::lock_guard<std::mutex> lock(mutex_);
   return state_;
+}
+
+std::pair<GimbalState, std::chrono::steady_clock::time_point> Gimbal::state_at() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return {state_, state_time_};
 }
 
 std::string Gimbal::str(GimbalMode mode) const
@@ -282,42 +291,82 @@ void Gimbal::read_thread()
         Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) * // 绕Y轴旋转pitch
         Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());   // 绕X轴旋转roll
 
-    queue_.push({q, t});
+    // 先更新线程安全状态、再入队：构造函数里的 queue_.pop() 返回时，state_/state_time_
+    // 必须已经就绪，否则首帧会出现 state_at() 时间戳仍为 0（gimbal_calib 会误判"未收到反馈"）
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto ypr_now = tools::eulers(q, 2, 1, 0);
+      // 云台状态反馈：一律由四元数(IMU)推导（上行包 gimbal_yaw/gimbal_pitch 字段已停用）
+      const double yaw_deg = ypr_now[0] * 57.3;
+      const double pitch_deg = ypr_now[1] * 57.3;
+      state_.yaw = static_cast<float>(yaw_deg);
+      state_.pitch = static_cast<float>(pitch_deg);
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto ypr_now = tools::eulers(q, 2, 1, 0);
-    state_.yaw = ypr_now[0] * 57.3;
-    state_.pitch = ypr_now[1] * 57.3;
-    
-    // state_.mode = 1;
-    state_.mode = rx_data_.mode;
-    state_.enemy_color = !rx_data_.color;
-    state_.bullet_speed = rx_data_.bullet_speed;
-    state_.bullet_count = rx_data_.bullet_count;
-    // rx_data_.mode = 2;
-    // 
+      // 角速度估计（rad/s）：相邻两帧反馈差分 + 一阶平滑
+      // 注意 delta_time(a, b) 返回 a-b 且约定 a 为较新时刻，写成 (last, now) 会得到负 dt，
+      // 导致下面所有分支都不成立、速度永远停在初值（首帧前是未定义值）。
+      const double dt = has_last_fb_ ? tools::delta_time(t, last_fb_time_) : 0.0;
+      if (has_last_fb_ && dt > 1e-4 && dt < 0.5) {
+        const double raw_yaw_vel =
+          tools::limit_rad((yaw_deg - last_fb_yaw_deg_) / 57.3) / dt;
+        const double raw_pitch_vel =
+          tools::limit_rad((pitch_deg - last_fb_pitch_deg_) / 57.3) / dt;
+        if (!has_vel_estimate_) {
+          // 首个有效差分直接作为初值
+          state_.yaw_vel = static_cast<float>(raw_yaw_vel);
+          state_.pitch_vel = static_cast<float>(raw_pitch_vel);
+          has_vel_estimate_ = true;
+        } else {
+          // 平滑系数按 dt 计算，反馈频率变化时时间常数保持不变
+          const double alpha = 1.0 - std::exp(-dt / kVelFilterTauS);
+          state_.yaw_vel = static_cast<float>((1.0 - alpha) * state_.yaw_vel + alpha * raw_yaw_vel);
+          state_.pitch_vel =
+            static_cast<float>((1.0 - alpha) * state_.pitch_vel + alpha * raw_pitch_vel);
+        }
+      } else if (has_last_fb_ && dt >= 0.5) {
+        // 反馈中断过久：清速度并等待下一次重新起步，避免使用陈旧角速度
+        state_.yaw_vel = 0;
+        state_.pitch_vel = 0;
+        has_vel_estimate_ = false;
+      }
+      last_fb_time_ = t;
+      last_fb_yaw_deg_ = static_cast<float>(yaw_deg);
+      last_fb_pitch_deg_ = static_cast<float>(pitch_deg);
+      has_last_fb_ = true;
+      state_time_ = t;
 
-    switch (rx_data_.mode) {
-      case 0:
-        mode_ = GimbalMode::IDLE;
-        break;
-      case 1:
-        mode_ = GimbalMode::AUTO_AIM;
-        break;
-      case 2:
-        mode_ = GimbalMode::SMALL_BUFF;
-        break;
-      case 3:
-        mode_ = GimbalMode::BIG_BUFF;
-        break;
-      case 4:
-        mode_ = GimbalMode::LONG_FOCAL_LENGTH;
-        break;
-      default:
-        mode_ = GimbalMode::IDLE;
-        tools::logger()->warn("[Gimbal] Invalid mode: {}", rx_data_.mode);
-        break;
+      // state_.mode = 1;
+      state_.mode = rx_data_.mode;
+      state_.enemy_color = !rx_data_.color;
+      state_.bullet_speed = rx_data_.bullet_speed;
+      state_.bullet_count = rx_data_.bullet_count;
+      // rx_data_.mode = 2;
+      // 
+
+      switch (rx_data_.mode) {
+        case 0:
+          mode_ = GimbalMode::IDLE;
+          break;
+        case 1:
+          mode_ = GimbalMode::AUTO_AIM;
+          break;
+        case 2:
+          mode_ = GimbalMode::SMALL_BUFF;
+          break;
+        case 3:
+          mode_ = GimbalMode::BIG_BUFF;
+          break;
+        case 4:
+          mode_ = GimbalMode::LONG_FOCAL_LENGTH;
+          break;
+        default:
+          mode_ = GimbalMode::IDLE;
+          tools::logger()->warn("[Gimbal] Invalid mode: {}", rx_data_.mode);
+          break;
+      }
     }
+
+    queue_.push({q, t});
   }
 
   tools::logger()->info("[Gimbal] read_thread stopped.");

@@ -35,6 +35,49 @@ Planner::Planner(const std::string & config_path) : config_path_(config_path)
     throw std::invalid_argument("shoot_offset must keep the firing index inside the MPC horizon");
   }
 
+  // ===== 方案 C：云台电机响应模型（可选，缺失时使用默认值；标定后填入 yaml）=====
+  const auto opt = [&yaml](const char * key, double fallback) {
+    return yaml[key] ? yaml[key].as<double>() : fallback;
+  };
+  // 校验后再 sync()：T_cl<=0 会让 a>1 导致落地检查发散（若容差开着就永久禁射），
+  // tau<0 或 NaN 同样无意义；非法值一律回退到默认并告警，不静默使用
+  const auto load_axis_model = [&](GimbalAxisModel & model, const char * tau_key,
+                                   const char * T_key, double tau_default,
+                                   double T_default) {
+    model.tau_s = opt(tau_key, tau_default);
+    model.T_cl_s = opt(T_key, T_default);
+    if (!std::isfinite(model.tau_s) || model.tau_s < 0) {
+      tools::logger()->warn(
+        "[Planner] {} = {} 非法(需 >= 0)，回退为 {}s", tau_key, model.tau_s, tau_default);
+      model.tau_s = tau_default;
+    }
+    if (!std::isfinite(model.T_cl_s) || model.T_cl_s <= 0) {
+      tools::logger()->warn(
+        "[Planner] {} = {} 非法(需 > 0)，回退为 {}s", T_key, model.T_cl_s, T_default);
+      model.T_cl_s = T_default;
+    }
+    model.sync();
+  };
+  load_axis_model(yaw_axis_model_, "gimbal_yaw_tau_s", "gimbal_yaw_T_cl_s", 0.005, 0.012);
+  load_axis_model(pitch_axis_model_, "gimbal_pitch_tau_s", "gimbal_pitch_T_cl_s", 0.005, 0.015);
+  fire_landing_tolerance_ = opt("fire_landing_tolerance_deg", -1.0) / 57.3;
+  if (yaml["gimbal_command_mode"]) {
+    gimbal_command_mode_step_ = yaml["gimbal_command_mode"].as<std::string>() == "trajectory_step";
+  }
+  // 离散模型的实际等效延时 = k_d·DT（纯死区，已被 DT 量化）+ DT·a/(1-a)（一阶收敛）
+  const auto eff_delay_ms = [](const GimbalAxisModel & m) {
+    const double first_order = (m.a < 1.0) ? DT * m.a / (1.0 - m.a) : 0.0;
+    return (m.k_d * DT + first_order) * 1e3;
+  };
+  tools::logger()->info(
+    "[Planner] Gimbal axis model: yaw tau={:.1f}ms T_cl={:.1f}ms k_d={} eff={:.1f}ms | "
+    "pitch tau={:.1f}ms T_cl={:.1f}ms k_d={} eff={:.1f}ms | landing tolerance={:.2f}deg | mode={}",
+    yaw_axis_model_.tau_s * 1e3, yaw_axis_model_.T_cl_s * 1e3, yaw_axis_model_.k_d,
+    eff_delay_ms(yaw_axis_model_), pitch_axis_model_.tau_s * 1e3,
+    pitch_axis_model_.T_cl_s * 1e3, pitch_axis_model_.k_d, eff_delay_ms(pitch_axis_model_),
+    fire_landing_tolerance_ * 57.3,
+    gimbal_command_mode_step_ ? "trajectory_step" : "fire_aim");
+
   setup_yaw_solver(config_path);
   setup_pitch_solver(config_path);
 }
@@ -59,7 +102,7 @@ Planner & Planner::operator=(const Planner & other)
   return *this;
 }
 
-Plan Planner::plan(Target target, double bullet_speed)
+Plan Planner::plan(Target target, double bullet_speed, const GimbalFeedback & fb)
 {
   if (target.armor_xyza_list().empty()) return {false};
   // std::cout<<target.getEKFXest()[0]<<std::endl;
@@ -101,16 +144,16 @@ Plan Planner::plan(Target target, double bullet_speed)
     return {false};
   }
 
-  // 3. Solve yaw
+  // 3. Solve yaw (初始状态 = 云台实际状态，方案 C：让 MPC 知道云台现在在哪、能否追上)
   Eigen::VectorXd x0(2);
-  x0 << traj(0, 0), traj(1, 0);
+  x0 << tools::limit_rad(fb.yaw_deg / 57.3 - yaw0), fb.yaw_vel;
   tiny_set_x0(yaw_solver_.get(), x0);
 
   yaw_solver_->work->Xref = traj.block(0, 0, 2, HORIZON);
   tiny_solve(yaw_solver_.get());
 
   // 4. Solve pitch
-  x0 << traj(2, 0), traj(3, 0);
+  x0 << fb.pitch_deg / 57.3, fb.pitch_vel;
   tiny_set_x0(pitch_solver_.get(), x0);
 
   pitch_solver_->work->Xref = traj.block(2, 0, 2, HORIZON);
@@ -123,13 +166,8 @@ Plan Planner::plan(Target target, double bullet_speed)
 
   plan.target_pitch = traj(2, HALF_HORIZON);
 
-  plan.yaw = tools::limit_rad(yaw_solver_->work->x(0, HALF_HORIZON) + yaw0);
-  plan.yaw_vel = yaw_solver_->work->x(1, HALF_HORIZON);
-  plan.yaw_acc = yaw_solver_->work->u(0, HALF_HORIZON);
-
-  plan.pitch = pitch_solver_->work->x(0, HALF_HORIZON);
-  plan.pitch_vel = pitch_solver_->work->x(1, HALF_HORIZON);
-  plan.pitch_acc = pitch_solver_->work->u(0, HALF_HORIZON);
+  write_mpc_commands(plan, yaw_solver_->work->x, yaw_solver_->work->u,
+                     pitch_solver_->work->x, pitch_solver_->work->u, yaw0);
 
   // auto shoot_offset_ = 2;
   plan.fire =
@@ -137,12 +175,27 @@ Plan Planner::plan(Target target, double bullet_speed)
       traj(0, HALF_HORIZON + shoot_offset_) - yaw_solver_->work->x(0, HALF_HORIZON + shoot_offset_),
       traj(2, HALF_HORIZON + shoot_offset_) -
         pitch_solver_->work->x(0, HALF_HORIZON + shoot_offset_)) < fire_thresh_;
+
+  // 方案 C：云台电机响应落地检查（用标定模型模拟真实云台，验证开火时刻确实到位）
+  if (fire_landing_tolerance_ > 0) {
+    double yaw_err = 0, pitch_err = 0;
+    gimbal_landing_check(
+      traj, yaw_solver_->work->x, pitch_solver_->work->x, fb, yaw0, yaw_err, pitch_err);
+    const bool landed = yaw_err < fire_landing_tolerance_ && pitch_err < fire_landing_tolerance_;
+    if (plan.fire && !landed) {
+      tools::logger()->debug(
+        "[Planner] landing check blocked: yaw_err={:.3f}deg pitch_err={:.3f}deg (tol={:.2f}deg)",
+        yaw_err * 57.3, pitch_err * 57.3, fire_landing_tolerance_ * 57.3);
+    }
+    plan.fire = plan.fire && landed;
+  }
   return plan;
 }
 
 
-Plan Planner::sbplan(Target target, double bullet_speed, double gimbal_yaw)
+Plan Planner::sbplan(Target target, double bullet_speed, const GimbalFeedback & fb)
 {
+  const double gimbal_yaw = fb.yaw_deg;
   if (target.armor_xyza_list().empty()) return {false};
   // std::cout<<target.getEKFXest()[0]<<std::endl;
   // std::cout<<target.getEKFXest()[0]<<std::endl;
@@ -190,16 +243,16 @@ Plan Planner::sbplan(Target target, double bullet_speed, double gimbal_yaw)
     return {false};
   }
 
-  // 3. Solve yaw
+  // 3. Solve yaw (初始状态 = 云台实际状态)
   Eigen::VectorXd x0(2);
-  x0 << traj(0, 0), traj(1, 0);
+  x0 << tools::limit_rad(fb.yaw_deg / 57.3 - yaw0), fb.yaw_vel;
   tiny_set_x0(yaw_solver_.get(), x0);
 
   yaw_solver_->work->Xref = traj.block(0, 0, 2, HORIZON);
   tiny_solve(yaw_solver_.get());
 
   // 4. Solve pitch
-  x0 << traj(2, 0), traj(3, 0);
+  x0 << fb.pitch_deg / 57.3, fb.pitch_vel;
   tiny_set_x0(pitch_solver_.get(), x0);
 
   pitch_solver_->work->Xref = traj.block(2, 0, 2, HORIZON);
@@ -212,13 +265,8 @@ Plan Planner::sbplan(Target target, double bullet_speed, double gimbal_yaw)
   
   plan.target_pitch = traj(2, HALF_HORIZON);
 
-  plan.yaw = tools::limit_rad(yaw_solver_->work->x(0, HALF_HORIZON) + yaw0);
-  plan.yaw_vel = yaw_solver_->work->x(1, HALF_HORIZON);
-  plan.yaw_acc = yaw_solver_->work->u(0, HALF_HORIZON);
-
-  plan.pitch = pitch_solver_->work->x(0, HALF_HORIZON);
-  plan.pitch_vel = pitch_solver_->work->x(1, HALF_HORIZON);
-  plan.pitch_acc = pitch_solver_->work->u(0, HALF_HORIZON);
+  write_mpc_commands(plan, yaw_solver_->work->x, yaw_solver_->work->u,
+                     pitch_solver_->work->x, pitch_solver_->work->u, yaw0);
 
   
 
@@ -269,6 +317,20 @@ Plan Planner::sbplan(Target target, double bullet_speed, double gimbal_yaw)
         traj(2, HALF_HORIZON + shoot_offset_) -
           pitch_solver_->work->x(0, HALF_HORIZON + shoot_offset_)) < fire_thresh_;
   }else plan.fire = 0;
+
+  // 方案 C：云台电机响应落地检查
+  if (fire_landing_tolerance_ > 0) {
+    double yaw_err = 0, pitch_err = 0;
+    gimbal_landing_check(
+      traj, yaw_solver_->work->x, pitch_solver_->work->x, fb, yaw0, yaw_err, pitch_err);
+    const bool landed = yaw_err < fire_landing_tolerance_ && pitch_err < fire_landing_tolerance_;
+    if (plan.fire && !landed) {
+      tools::logger()->debug(
+        "[Planner] landing check blocked: yaw_err={:.3f}deg pitch_err={:.3f}deg (tol={:.2f}deg)",
+        yaw_err * 57.3, pitch_err * 57.3, fire_landing_tolerance_ * 57.3);
+    }
+    plan.fire = plan.fire && landed;
+  }
 
   // target.predict(-gimbal_control_delay);
   // plan.fire = rbShoot(target, (gimbal_yaw )/57.3 - yaw_offset_);
@@ -384,8 +446,9 @@ bool Planner::rbShoot(Target target, double gimbal_yaw, bool tower_fixed_pitch){
     return suggest_fire;
 }
 
-Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
+Plan Planner::rbplan(Target target, double bullet_speed, const GimbalFeedback & fb)
 {
+  const double gimbal_yaw = fb.yaw_deg;
   if (target.armor_xyza_list().empty()) return {false};
   // std::cout<<target.getEKFXest()[0]<<std::endl;
   // std::cout<<target.getEKFXest()[0]<<std::endl;
@@ -434,16 +497,16 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
     return {false};
   }
 
-  // 3. Solve yaw
+  // 3. Solve yaw (初始状态 = 云台实际状态)
   Eigen::VectorXd x0(2);
-  x0 << traj(0, 0), traj(1, 0);
+  x0 << tools::limit_rad(gimbal_yaw / 57.3 - yaw0), fb.yaw_vel;
   tiny_set_x0(yaw_solver_.get(), x0);
 
   yaw_solver_->work->Xref = traj.block(0, 0, 2, HORIZON);
   tiny_solve(yaw_solver_.get());
 
   // 4. Solve pitch
-  x0 << traj(2, 0), traj(3, 0);
+  x0 << fb.pitch_deg / 57.3, fb.pitch_vel;
   tiny_set_x0(pitch_solver_.get(), x0);
 
   pitch_solver_->work->Xref = traj.block(2, 0, 2, HORIZON);
@@ -456,13 +519,8 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   
   plan.target_pitch = traj(2, HALF_HORIZON);
 
-  plan.yaw = tools::limit_rad(yaw_solver_->work->x(0, HALF_HORIZON) + yaw0);
-  plan.yaw_vel = yaw_solver_->work->x(1, HALF_HORIZON);
-  plan.yaw_acc = yaw_solver_->work->u(0, HALF_HORIZON);
-
-  plan.pitch = pitch_solver_->work->x(0, HALF_HORIZON);
-  plan.pitch_vel = pitch_solver_->work->x(1, HALF_HORIZON);
-  plan.pitch_acc = pitch_solver_->work->u(0, HALF_HORIZON);
+  write_mpc_commands(plan, yaw_solver_->work->x, yaw_solver_->work->u,
+                     pitch_solver_->work->x, pitch_solver_->work->u, yaw0);
 
   
 
@@ -564,9 +622,31 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
     return suggest_fire;
   };
   // gimbal_yaw 由上层以「度」传入（见 io::GimbalState::yaw），yaw_offset_ 为弧度，先统一到弧度
-  plan.fire = is_fire(gimbal_yaw / 57.3 - yaw_offset_, target, false);
+  // 开火门限参考 = 子弹命中点 = 目标在(出膛时刻+飞行时间) 的位置
+  //   = θ(t + τ_fire + fly)，τ_fire 即 high/low_speed_delay_time（发弹命令→出膛延迟）。
+  // 当前 target 的时间戳 = now + speed_delay + gimbal_delay + fly，
+  // 只需回退云台提前量 gimbal_delay（τ+T）即落在 θ(t + speed_delay + fly)。
+  // 注意：不能把 speed_delay 也回退（上一版错误）——否则门限参考晚于命中点，
+  // 高速目标即使完全命中也被门限拒发。
+  Target target_at_bullet = target;
+  target_at_bullet.predict(-gimbal_delay_);
+  plan.fire = is_fire(gimbal_yaw / 57.3 - yaw_offset_, target_at_bullet, false);
   // tools::logger()->warn("fire:{}", plan.fire);
   plan.target_yaw = (aim_target_yaw + yaw_offset_ )* 57.3;
+
+  // 方案 C：云台电机响应落地检查（用标定模型模拟真实云台，验证开火时刻确实到位）
+  if (fire_landing_tolerance_ > 0) {
+    double yaw_err = 0, pitch_err = 0;
+    gimbal_landing_check(
+      traj, yaw_solver_->work->x, pitch_solver_->work->x, fb, yaw0, yaw_err, pitch_err);
+    const bool landed = yaw_err < fire_landing_tolerance_ && pitch_err < fire_landing_tolerance_;
+    if (plan.fire && !landed) {
+      tools::logger()->debug(
+        "[Planner] landing check blocked: yaw_err={:.3f}deg pitch_err={:.3f}deg (tol={:.2f}deg)",
+        yaw_err * 57.3, pitch_err * 57.3, fire_landing_tolerance_ * 57.3);
+    }
+    plan.fire = plan.fire && landed;
+  }
 
   return plan;
 }
@@ -859,6 +939,89 @@ Eigen::Matrix<double, 2, 1> Planner::heroaim(const Target & target, double bulle
   auto now_pitch_offset = is_far ? far_pitch_offset_ : pitch_offset_;
 
   return {tools::limit_rad(azim + yaw_offset_), bullet_traj.pitch + now_pitch_offset};
+}
+
+void Planner::write_mpc_commands(
+  Plan & plan,
+  const Eigen::MatrixXd & yaw_x,
+  const Eigen::MatrixXd & yaw_u,
+  const Eigen::MatrixXd & pitch_x,
+  const Eigen::MatrixXd & pitch_u,
+  double yaw0) const
+{
+  /// 命令索引选择：
+  /// - fire_aim（默认，兼容原行为）：发送开火时刻（时域中心）的瞄点；
+  /// - trajectory_step：发送"经传输延时后下一拍"的规划轨迹状态，与下位机 1kHz
+  ///   窗口插值器配合（命令序列即为云台应走的轨迹），并使落地检查模型自洽。
+  const int idx = gimbal_command_mode_step_ ? (yaw_axis_model_.k_d + 1) : HALF_HORIZON;
+  const int idx_clamped = std::max(0, std::min(idx, HORIZON - 2));
+
+  plan.yaw = tools::limit_rad(yaw_x(0, idx_clamped) + yaw0);
+  plan.yaw_vel = yaw_x(1, idx_clamped);
+  plan.yaw_acc = yaw_u(0, idx_clamped);
+
+  plan.pitch = pitch_x(0, idx_clamped);
+  plan.pitch_vel = pitch_x(1, idx_clamped);
+  plan.pitch_acc = pitch_u(0, idx_clamped);
+}
+
+void Planner::gimbal_landing_check(
+  const Trajectory & traj,
+  const Eigen::MatrixXd & yaw_x,
+  const Eigen::MatrixXd & pitch_x,
+  const GimbalFeedback & fb,
+  double yaw0,
+  double & yaw_err,
+  double & pitch_err) const
+{
+  /// 用标定的"纯死区 k_d + 一阶 a"模型模拟真实云台从实际状态出发、
+  /// 跟随"发送给下位机的命令序列"的响应，检查开火索引时刻与参考瞄点的残差。
+  /// 命令序列：trajectory_step 模式取 MPC 规划轨迹（与发送的下一拍状态一致）；
+  /// fire_aim 模式取参考轨迹（发送的瞄点序列在稳态下近似参考轨迹）。
+  /// 注意：fire_aim 模式下模型云台稳态滞后命令 (τ+T)·ω，
+  /// 因此比较基准取"回退 k_L 拍"的参考值（= 子弹到达时刻参考），
+  /// 否则提前量与检查双重计滞后；trajectory_step 模式命令已按 k_d+1 预平移，
+  /// 只剩余 (T−DT)·ω 小残差，无需再回退。
+  const int k_f = HALF_HORIZON + shoot_offset_;
+  yaw_err = 1e9;
+  pitch_err = 1e9;
+  if (k_f < 0 || k_f >= HORIZON) return;
+
+  const int k_ref_yaw = gimbal_command_mode_step_
+                          ? k_f
+                          : std::max(0, k_f - static_cast<int>(std::lround(
+                              (yaw_axis_model_.tau_s + yaw_axis_model_.T_cl_s) / DT)));
+  const int k_ref_pitch = gimbal_command_mode_step_
+                            ? k_f
+                            : std::max(0, k_f - static_cast<int>(std::lround(
+                                (pitch_axis_model_.tau_s + pitch_axis_model_.T_cl_s) / DT)));
+
+  const auto simulate = [k_f](const GimbalAxisModel & model,
+                              double x0,
+                              const Eigen::MatrixXd & plan_x,
+                              const Trajectory & traj,
+                              int traj_row,
+                              bool use_plan) {
+    double p = x0;
+    for (int k = 0; k <= k_f; ++k) {
+      if (k < model.k_d) continue;  // 命令仍在传输/处理中，云台保持当前位置
+      const int t = std::min(k - model.k_d, HORIZON - 1);
+      const double cmd = use_plan ? plan_x(0, t) : traj(traj_row, t);
+      p = model.a * p + (1.0 - model.a) * cmd;
+    }
+    return p;
+  };
+
+  // yaw：相对 yaw0 框架；pitch：框架同参考轨迹（绝对带偏移）
+  const double yaw_sim = simulate(
+    yaw_axis_model_, tools::limit_rad(fb.yaw_deg / 57.3 - yaw0),
+    yaw_x, traj, 0, gimbal_command_mode_step_);
+  const double pitch_sim = simulate(
+    pitch_axis_model_, fb.pitch_deg / 57.3,
+    pitch_x, traj, 2, gimbal_command_mode_step_);
+
+  yaw_err = std::abs(yaw_sim - traj(0, k_ref_yaw));
+  pitch_err = std::abs(pitch_sim - traj(2, k_ref_pitch));
 }
 
 

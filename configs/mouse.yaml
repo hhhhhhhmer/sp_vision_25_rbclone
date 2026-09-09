@@ -50,6 +50,18 @@ low_speed_delay_time: 0.013 #s
 gimbal_delay: 0.001
 shoot_offset: 2
 
+#####-----方案C: 云台电机响应模型(标定后填写)-----#####
+# 纯死区 tau(串口+电控接收+计算) 与收敛时间常数 T_cl,
+# 由阶跃/斜坡测试标定; k_d = round(tau/DT) 自动计算
+gimbal_yaw_tau_s: 0.005
+gimbal_yaw_T_cl_s: 0.012
+gimbal_pitch_tau_s: 0.005
+gimbal_pitch_T_cl_s: 0.015
+# 开火落地检查容差(度), -1 关闭; 建议标定后 0.8~2.0
+fire_landing_tolerance_deg: -1
+# 命令模式: fire_aim(默认,发开火时刻瞄点) | trajectory_step(发轨迹下一拍,配合电控1kHz插值)
+gimbal_command_mode: fire_aim
+
 #####-----shooter参数-----#####
 first_tolerance: 3 # 近距离射击容差，degree
 second_tolerance: 2 # 远距离射击容差，degree

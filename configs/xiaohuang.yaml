@@ -48,6 +48,14 @@ low_speed_delay_time: 0.017 # s
 gimbal_delay: 0.002
 shoot_offset: 2
 
+#####-----方案C: 云台电机响应模型(标定后填写)-----#####
+gimbal_yaw_tau_s: 0.005
+gimbal_yaw_T_cl_s: 0.012
+gimbal_pitch_tau_s: 0.005
+gimbal_pitch_T_cl_s: 0.015
+fire_landing_tolerance_deg: -1 # -1关闭; 标定后 0.8~2.0
+gimbal_command_mode: fire_aim # fire_aim | trajectory_step
+
 #####-----shooter参数-----#####
 first_tolerance: 3 # 近距离射击容差，degree
 second_tolerance: 2 # 远距离射击容差，degree

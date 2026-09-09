@@ -76,7 +76,7 @@ int main(int argc, char * argv[])
       auto gs = gimbal.state();
 
       //MPC预测以及+自家火控
-      auto plan = planner.plan(target, gs.bullet_speed, gs.yaw,  auto_aim::Planner::ShootStrategy::rbSuppressiveFire);
+      auto plan = planner.plan(target, gs.bullet_speed, gs.yaw,  auto_aim::Planner::ShootStrategy::rbSuppressiveFire, gs.pitch, gs.yaw_vel, gs.pitch_vel);
 
       auto plan_t_end = std::chrono::steady_clock::now();
      // 1. 设置默认值

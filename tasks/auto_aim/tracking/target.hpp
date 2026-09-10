@@ -3,6 +3,7 @@
 
 #include <Eigen/Dense>
 #include <chrono>
+#include <list>
 #include <optional>
 #include <queue>
 #include <string>
@@ -45,6 +46,35 @@ public:
   /** @brief 使用装甲板观测更新目标滤波器 @param armor 新观测装甲板 @return 完成 EKF 校正时返回 true；观测无法匹配到装甲板时返回 false，此时滤波器状态保持不变 */
   bool update(const Armor & armor);
 
+  /** @brief 使用装甲板观测更新目标滤波器，并可按马氏距离门限拒绝异常观测 @param armor 新观测装甲板 @param max_mahalanobis 最大允许马氏距离；<= 0 表示不做门限 @return 完成 EKF 校正时返回 true；被门限拒绝或无法匹配时返回 false，滤波器状态保持不变 */
+  bool update(const Armor & armor, double max_mahalanobis);
+
+  /** @brief 使用装甲板观测更新目标滤波器，可按马氏距离门限与已用ID拒绝异常观测 @param armor 新观测装甲板 @param max_mahalanobis 最大允许马氏距离；<= 0 表示不做门限 @param exclude_ids 本帧已被其它装甲板占用的ID @param angle_sigma_scale 装甲板朝向观测噪声放大系数，用于给不可靠的朝向观测降权 @return 完成 EKF 校正时返回 true；被拒绝或无法匹配时返回 false，滤波器状态保持不变 */
+  bool update(
+    const Armor & armor, double max_mahalanobis, const std::vector<int> & exclude_ids,
+    double angle_sigma_scale = 1.0);
+
+  /**
+   * @brief 用一帧内的多块装甲板做联合更新
+   * @param armors 本帧候选装甲板列表（按离图像中心由近到远排序）
+   * @param max_mahalanobis 第二块及之后装甲板的马氏距离门限；<= 0 表示不限制
+   * @param max_armors 本帧最多融合的装甲板数量
+   * @return 至少完成一次校正时返回 true
+   * @note UV 模式下把所有关联成功的装甲板拼成一次批量观测（联合更新）；
+   *       非 UV 模式下退化为逐块顺序更新，行为与旧版本一致
+   */
+  bool update_batch(const std::list<Armor> & armors, double max_mahalanobis, int max_armors = 99);
+
+  /** @brief 最近一次批量更新实际使用的观测条数 @return 观测条数 */
+  int last_batch_observation_count() const { return last_batch_count_; }
+
+  /** @brief 配置 UV 观测模式 @param config UV 配置 */
+  void set_uv_config(const UvConfig & config);
+  /** @brief 更新相机几何（UV 观测使用） @param geometry 相机内外参与云台到世界旋转 */
+  void set_camera_geometry(const CameraGeometry & geometry);
+  /** @brief UV 观测模式是否可用 @return 可用时返回 true */
+  bool uv_ready() const;
+
   /** @brief 获取滤波状态副本 @return EKF 状态向量 */
   Eigen::VectorXd ekf_x() const;
   /** @brief 获取滤波器只读引用 @return RV 扩展卡尔曼滤波器 */
@@ -53,6 +83,12 @@ public:
   std::vector<Eigen::Vector4d> armor_xyza_list() const;
   /** @brief 获取最近装甲板的位置、偏航和距离 @return xyzad 向量 */
   Eigen::Matrix<double, 5, 1> get_recent_armor_xyzad() const;
+
+  /** @brief 设置观测噪声标准差，覆盖 EKF 内部启发式 @param azimuth_sigma 方位角噪声标准差 (rad) @param distance_sigma 距离噪声标准差 (m) @param angle_sigma 朝向噪声标准差 (rad) */
+  void set_measurement_sigmas(double azimuth_sigma, double distance_sigma, double angle_sigma)
+  {
+    ekf_.set_measurement_sigmas(azimuth_sigma, distance_sigma, angle_sigma);
+  }
 
   /** @brief 根据状态计算指定编号装甲板的位置 @param x 目标状态 @param id 装甲板编号 @return 装甲板世界坐标 */
   Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;
@@ -89,8 +125,22 @@ public:
   //长短焦
   bool cam_is_short = true;
   
-  int update_count_;
+  /**
+   * @brief 前哨站高度锚点的最短采样帧数
+   *
+   * 锚点由 h_armor_xyz 的互补滤波结果累加平均得到，而互补滤波从 0 起步（系数 0.1），
+   * 只有 1~2 帧样本时平均值 ≈ 0.1×真实高度。这样的锚点会让高度阶梯方向翻转
+   * （本来高 0.1m 的板被判成低 0.1m），瞄准点随之偏 0.2~0.4m。
+   */
+  static constexpr int kTowerArmorMinAnchorSamples = 5;
 
+  /**
+   * @brief 发生过 EKF 校正的帧数
+   *
+   * 语义是"帧数"而非"校正次数"：多装甲融合会在同一帧内多次校正，这里只按帧自增一次。
+   * 下游（convergened()、planner 开火门槛、binocular 等待帧数）的阈值都是按每帧一次调的。
+   */
+  int update_count_;
   std::optional<tools::Wave> wave_;
 
 private:
@@ -107,6 +157,20 @@ private:
 
   /** @brief 将前哨站装甲板高度观测同步到目标模型 */
   void sync_tower_armor_heights();
+
+  /**
+   * @brief 校正后的统一记账（换板统计、前哨站高度累加、update_count、last_id 等）
+   * @param id 本次校正使用的装甲板编号
+   * @param primary 是否为主观测（决定 last_id 与 xyz_in_world）
+   * @param armor_xyz 该装甲板的世界坐标（UV 模式下用校正后的预测值，传统模式用 PnP 观测值）
+   */
+  void bookkeep_after_update(int id, bool primary, const Eigen::Vector3d & armor_xyz);
+
+  /** @brief 最近一次批量更新的观测条数 */
+  int last_batch_count_ = 0;
+
+  /** @brief 已计入 update_count_ 的帧时间戳（同一帧内多次校正只计一次） */
+  std::chrono::steady_clock::time_point last_counted_frame_{};
 };
 
 }  // namespace auto_aim

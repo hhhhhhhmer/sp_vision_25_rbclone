@@ -171,10 +171,104 @@ void Target::predict(double dt, Eigen::VectorXd u_xyz)
   rv_residual = std::nullopt;
 }
 
-bool Target::update(const Armor & armor)
+bool Target::update(const Armor & armor) { return update(armor, -1.0, {}); }
+
+bool Target::update(const Armor & armor, double max_mahalanobis)
 {
+  return update(armor, max_mahalanobis, {});
+}
+
+void Target::set_uv_config(const UvConfig & config) { ekf_.enable_uv(config); }
+
+void Target::set_camera_geometry(const CameraGeometry & geometry)
+{
+  ekf_.set_camera_geometry(geometry);
+}
+
+bool Target::uv_ready() const { return ekf_.uv_ready(); }
+
+void Target::bookkeep_after_update(int id, bool primary, const Eigen::Vector3d & armor_xyz)
+{
+  if (id < 0 || id >= armor_num_) return;
+
+  if (id != 0) jumped = true;
+
+  // 检测换板事件
+  if (id != last_id) {
+    is_switch_ = true;
+    switch_count_++;
+
+    // 换板时，将上一块装甲板的历史累加数据计算为平均高度锚点
+    if (name == ArmorName::outpost && last_id >= 0 && last_id < 3) {
+      // 采样窗口太短时不要写锚点：互补滤波从 0 起步（系数 a=0.1），只有 1~2 帧样本时
+      // 平均值 ≈ 0.1×真实高度，写进锚点会让高度阶梯方向翻转（详情见 kTowerArmorMinAnchorSamples）
+      if (tower_armor_hs_datas_ptr[last_id] >= kTowerArmorMinAnchorSamples) {
+        tower_armor_hs[last_id].first = true;  // 标记该装甲板已有有效的历史数据
+        tower_armor_hs[last_id].second =
+          tower_armor_hs_datas[last_id] / tower_armor_hs_datas_ptr[last_id];
+      }
+    }
+  } else {
+    is_switch_ = false;
+  }
+
+  // 累加当前块装甲板的高度特征
+  if (name == ArmorName::outpost) {
+    const double a = 0.1;  // 互补滤波系数
+    tower_armor_h = a * armor_xyz[2] + (1 - a) * last_tower_armor_h[id];
+
+    tower_armor_hs_datas[id] += tower_armor_h;
+    last_tower_armor_h[id] = tower_armor_h;
+    tower_armor_hs_datas_ptr[id]++;
+
+    // 历史高度数据保护机制，防止长时间追踪导致累加溢出
+    if (tower_armor_hs_datas[id] > 10000) {
+      tower_armor_hs_datas[id] = (tower_armor_hs_datas[id] / tower_armor_hs_datas_ptr[id]) * 600;
+      tower_armor_hs_datas_ptr[id] = 600;
+    }
+    sync_tower_armor_heights();
+  }
+
+  if (primary) {
+    last_id = id;
+    xyz_in_world = armor_xyz;
+  }
+
+  // update_count_ 的语义是"发生过校正的帧数"：多装甲融合时一帧内会多次调用本函数，
+  // 必须按帧去重，否则下游按"每帧一次"调的阈值会被成倍加速
+  // （convergened() 的前哨站位置锁定、planner 的开火门槛、binocular 的等待帧数）
+  if (t_ != last_counted_frame_) {
+    last_counted_frame_ = t_;
+    update_count_++;
+  }
+}
+
+bool Target::update(
+  const Armor & armor, double max_mahalanobis, const std::vector<int> & exclude_ids,
+  double angle_sigma_scale)
+{
+  // UV 观测模式：单块装甲板也走批量更新路径
+  if (ekf_.uv_ready()) {
+    ekf_.clear_uv_observations();
+    const int uv_id = ekf_.associate_uv_armor(armor, exclude_ids, max_mahalanobis);
+    if (uv_id < 0) return false;
+    if (!ekf_.add_uv_observation(uv_id, armor)) return false;
+
+    const UvModel::Observation z_pred = ekf_.uv_predict(uv_id, armor.type);
+    const UvModel::Observation z_obs = UvModel::observation(armor.points);
+    if (ekf_.correct_uv_batch() == 0) return false;
+
+    Eigen::Vector4d residual;
+    residual << tools::limit_rad(z_obs[0] - z_pred[0]), z_obs[1] - z_pred[1], z_obs[2] - z_pred[2],
+      z_obs[3] - z_pred[3];
+    rv_residual = residual.array().square().matrix();
+
+    bookkeep_after_update(uv_id, true, ekf_.h_armor_xyz(ekf_.x, uv_id));
+    return true;
+  }
+
   int id = 0;
-  ekf_.prepare_measurement(armor, cam_is_short, update_count_);
+  ekf_.prepare_measurement(armor, cam_is_short, update_count_, angle_sigma_scale);
 
   if (this->name == ArmorName::outpost) {
     // 【策略 A：前哨站专用】
@@ -194,16 +288,16 @@ bool Target::update(const Armor & armor)
     std::sort(
       xyza_i_list.begin(), xyza_i_list.end(),
       [](const std::pair<Eigen::Vector4d, int> & a, const std::pair<Eigen::Vector4d, int> & b) {
-        Eigen::Vector3d ypd1 = tools::xyz2ypd(a.first.head(3));
-        Eigen::Vector3d ypd2 = tools::xyz2ypd(b.first.head(3));
+        Eigen::Vector3d ypd1 = tools::xyz2ypd(a.first.head<3>());
+        Eigen::Vector3d ypd2 = tools::xyz2ypd(b.first.head<3>());
         return ypd1[2] < ypd2[2];
       });
 
     // 只取最近的3个装甲板验证角度匹配度
     for (int i = 0; i < 3; i++) {
       const auto & xyza = xyza_i_list[i].first;
-      Eigen::Vector3d ypd = tools::xyz2ypd(xyza.head(3));
-      
+      Eigen::Vector3d ypd = tools::xyz2ypd(xyza.head<3>());
+
       auto angle_error = std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3])) +
                          std::abs(tools::limit_rad(armor.ypd_in_world[0] - ypd[0]));
 
@@ -214,58 +308,82 @@ bool Target::update(const Armor & armor)
     }
 
   } else {
-    id = ekf_.select_armor_id(last_id);
+    id = ekf_.select_armor_id(last_id, max_mahalanobis, exclude_ids);
+    // 被马氏距离门限或已用ID拒绝：不修改滤波器状态
+    if (id < 0) return false;
   }
 
   if (id < 0 || id >= armor_num_) return false;
-
-
-  if (id != 0) jumped = true;
-
-  // 检测换板事件
-  if (id != last_id) {
-    is_switch_ = true;
-    switch_count_++;
-    
-    // 换板时，将上一块装甲板的历史累加数据计算为平均高度锚点
-    if (name == ArmorName::outpost && last_id >= 0 && last_id < 3) {
-      if (tower_armor_hs_datas_ptr[last_id] > 0) {
-        tower_armor_hs[last_id].first = true; // 标记该装甲板已有有效的历史数据
-        tower_armor_hs[last_id].second = tower_armor_hs_datas[last_id] / tower_armor_hs_datas_ptr[last_id];
-      }
-    }
-  } else {
-    is_switch_ = false;
-  }
-
-  // 累加当前块装甲板的高度特征
-  if(name == ArmorName::outpost){
-    double a = 0.1; // 互补滤波系数
-    tower_armor_h = a * armor.xyz_in_world[2] + (1 - a) * last_tower_armor_h[id];
-    
-    tower_armor_hs_datas[id] += tower_armor_h;
-    last_tower_armor_h[id] = tower_armor_h;
-    tower_armor_hs_datas_ptr[id]++;     
-
-    // 历史高度数据保护机制，防止长时间追踪导致累加溢出
-    if(tower_armor_hs_datas[id] > 10000){
-      tower_armor_hs_datas[id] = (tower_armor_hs_datas[id] / tower_armor_hs_datas_ptr[id]) * 600;
-      tower_armor_hs_datas_ptr[id] = 600;
-    }
-    sync_tower_armor_heights();
-  }
-
-  last_id = id;
-  update_count_++;    
-  xyz_in_world = armor.xyz_in_world;
 
   ekf_.correct(id);
 
   Eigen::Vector4d observation_xyzyaw;
   observation_xyzyaw << armor.xyz_in_world, armor.ypr_in_world[0];
-  rv_residual =
-    ekf_.posterior_residual_squared(observation_xyzyaw, id);
+  rv_residual = ekf_.posterior_residual_squared(observation_xyzyaw, id);
 
+  // 换板统计 / 前哨站高度累加
+  bookkeep_after_update(id, true, armor.xyz_in_world);
+  return true;
+}
+
+bool Target::update_batch(const std::list<Armor> & armors, double max_mahalanobis, int max_armors)
+{
+  last_batch_count_ = 0;
+  // 非 UV 模式：退化为逐块顺序更新，保持旧行为
+  if (!ekf_.uv_ready()) {
+    bool found = false;
+    std::vector<int> used_ids;
+    for (const auto & armor : armors) {
+      if (armor.name != name || armor.type != armor_type) continue;
+      const double gate = found ? max_mahalanobis : -1.0;
+      if (!update(armor, gate, used_ids)) continue;
+      used_ids.push_back(last_id);
+      found = true;
+      last_batch_count_++;
+      if (last_batch_count_ >= max_armors) break;
+    }
+    return found;
+  }
+
+  // UV 模式：先把所有可见装甲板关联到不同编号，再做一次联合更新
+  ekf_.clear_uv_observations();
+  std::vector<int> used_ids;
+  struct Accepted
+  {
+    int id;
+    Eigen::Vector4d residual;
+  };
+  std::vector<Accepted> accepted;
+
+  for (const auto & armor : armors) {
+    if (armor.name != name || armor.type != armor_type) continue;
+    // 第一块装甲板不设门限（最靠近图像中心），后续装甲板必须通过门限
+    const double gate = accepted.empty() ? -1.0 : max_mahalanobis;
+    const int id = ekf_.associate_uv_armor(armor, used_ids, gate);
+    if (id < 0) continue;
+
+    const UvModel::Observation z_pred = ekf_.uv_predict(id, armor.type);
+    const UvModel::Observation z_obs = UvModel::observation(armor.points);
+    if (!ekf_.add_uv_observation(id, armor)) continue;
+
+    Eigen::Vector4d residual;
+    residual << tools::limit_rad(z_obs[0] - z_pred[0]), z_obs[1] - z_pred[1], z_obs[2] - z_pred[2],
+      z_obs[3] - z_pred[3];
+    accepted.push_back({id, residual});
+    used_ids.push_back(id);
+    if (static_cast<int>(accepted.size()) >= max_armors) break;
+  }
+
+  if (accepted.empty()) return false;
+  const std::size_t applied = ekf_.correct_uv_batch();
+  if (applied == 0) return false;
+  last_batch_count_ = static_cast<int>(applied);
+
+  rv_residual = accepted.front().residual.array().square().matrix();
+  for (std::size_t i = 0; i < accepted.size(); i++) {
+    bookkeep_after_update(
+      accepted[i].id, i == 0, ekf_.h_armor_xyz(ekf_.x, accepted[i].id));
+  }
   return true;
 }
 

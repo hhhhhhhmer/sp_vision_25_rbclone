@@ -1,9 +1,9 @@
-# enemy_color: "red"
-enemy_color: "blue"
+enemy_color: "red"
+# enemy_color: "blue"
 # enemy_color: "auto" # 通过电控发来己方颜色判断敌方颜色，默认蓝色，红色时请改为"red"
 
 #####-----神经网络参数-----#####
-yolo_name: yolov5
+yolo_name: yolov8
 classify_model: ../assets/tiny_resnet.onnx
 yolo11_model_path: ../assets/yolo11.xml
 yolov8_model_path: ../assets/yolov8.xml
@@ -37,6 +37,46 @@ min_confidence: 0.8
 min_detect_count: 5
 max_temp_lost_count: 11
 outpost_max_temp_lost_count: 75
+
+# 多装甲板融合：同一帧把多块匹配装甲板都送入 EKF
+# 离线回放实测（快/ 7 段录像）：开启 + 下面的观测噪声参数 = "t2m" 档，
+# 一步预测误差中位数 26.2px -> 14.6px（-44%），跟踪中断 120 -> 40 次
+multi_armor_fusion: true
+# 融合第二块及之后装甲板时的马氏距离门限（4 自由度卡方，99.9% 约 18.5）
+multi_armor_gate: 20.0
+# 融合第二块及之后装甲板时，其 PnP 朝向的噪声放大系数（朝向常因搜索窗口/镜像解不可靠）
+multi_armor_angle_sigma_scale: 10.0
+
+# 观测噪声标准差覆盖；不写或 <= 0 时沿用 rv_from_fyt.cpp 内部启发式
+# 实测（快/ 四段录像，90fps）：当前启发式等价于 方位角≈3.6°、距离≈1.0m、朝向≈18°，
+# 而单装甲真实可达精度约 1°、0.15m、9°，噪声被高估 10~200 倍，滤波器几乎丢弃距离观测。
+# 建议先在离线回放上 A/B 后再上车：t1/t2/t3 对应下面三档
+#   t1: 0.02  0.25  0.15   （保守）
+#   t2: 0.01  0.15  0.10   （推荐起点）
+#   t3: 0.005 0.08  0.06   （激进，预测误差更小但状态抖动更大）
+# 下面三行是实测推荐的 "t2m" 档（与多装甲融合一起用）；注释掉即回到原启发式（=改动前行为）
+meas_azimuth_sigma: 0.01   # rad，方位/俯仰角
+meas_distance_sigma: 0.15  # m，距离
+meas_angle_sigma: 0.10     # rad，装甲板朝向
+# 更保守/更激进的两档（仅供离线 A/B 参考）：
+#   t1: 0.02  0.25  0.15
+#   t3: 0.005 0.08  0.06
+
+# UV（像素/UVL）观测：直接用检测到的灯条端点像素做观测，逐帧不再跑 PnP+yaw 搜索，
+# PnP 只在首帧初始化时使用；Solver 仍保留用于重投影调试与前哨 pitch 判别。
+# 离线回放实测（快/ 7 段录像）：预测误差与调好的 meas_* 基线相当或略优，
+# 半径/旋转相位估计明显更稳（半径 p05~p95 从 0.14~0.48 收到 0.19~0.23），
+# 且每帧省掉约 200us 的 140 步 yaw 搜索。建议先离线 A/B 再上车。
+uv_observation: true
+uv_sigma_px: 1.0             # 灯条端点检测噪声 (px)
+uv_sigma_len_ratio: 0.02     # 与灯条像素长度成比例的附加端点噪声（尺度不变项）
+uv_sigma_attitude_deg: 0.5   # 云台/外参姿态误差 (deg)，等效像素加到灯条中心噪声
+uv_attitude_common_ratio: 0.0 # 姿态误差中整帧共模的比例：0=各灯条独立，1=完全共模
+uv_sigma_angle: 0.1          # 灯条角度噪声下限 (rad)
+uv_associate_gate_px: 60.0   # 灯条中心像素距离关联门限
+uv_facing_cos_min: 0.15      # 可见性判据（装甲板法线与视线夹角余弦下限）
+uv_radius_prior_sigma: 0.02  # 单装甲退化保护：半径先验标准差 (m)
+uv_process_noise_z_scale: 1.0 # 深度过程噪声缩放；1.0 预测误差最优，0.01~0.1 深度更平滑
 
 #####-----aimer参数-----#####
 yaw_offset: 0 # degree -2.5

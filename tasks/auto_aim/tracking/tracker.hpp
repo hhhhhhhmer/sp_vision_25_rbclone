@@ -2,6 +2,8 @@
 #define AUTO_AIM__TRACKER_HPP
 
 #include <Eigen/Dense>
+#include <yaml-cpp/yaml.h>
+
 #include <chrono>
 #include <list>
 #include <optional>
@@ -72,6 +74,16 @@ public:
   void set_fft(tools::FFTExample * fft);
   /** @brief 获取当前目标累计更新次数 @return 更新次数 */
   inline size_t get_update_count(){return this->target_.update_count_;}
+  /** @brief 获取最近一帧对目标滤波器执行的校正次数 @return 校正次数（0 表示本帧未校正） */
+  inline int last_update_count() const { return last_update_count_; }
+  /** @brief 查询 UV 观测是否开启 @return 开启返回 true */
+  inline bool uv_enabled() const { return uv_config_.enabled; }
+  /**
+   * @brief 运行时切换 UV / 传统观测（调试与实车 A/B 用）
+   * @param enabled 是否使用 UV 观测
+   * @note 两种观测模式的滤波状态不通用，切换后会 reset()，下一帧用 PnP 重新初始化
+   */
+  void set_uv_enabled(bool enabled);
 private:
   IArmorPoseSolver * solver_;
   io::Gimbal* gimbal_ = nullptr; // 新增一个云台指针，默认为空
@@ -91,6 +103,24 @@ private:
   ArmorPriority omni_target_priority_;
   std::optional<uint8_t> last_mode_;
   bool cam_is_switch = false, last_cam_is_short = true;
+  /** 多装甲板融合开关：同一帧内把多块匹配装甲板都送入滤波器 */
+  bool multi_armor_fusion_ = false;
+  /** 多装甲板融合时第二块及之后装甲板的马氏距离门限；<= 0 表示不限制 */
+  double multi_armor_gate_ = 20.0;
+  /** 多装甲板融合时第二块及之后装甲板朝向观测的噪声放大系数 */
+  double multi_armor_angle_sigma_scale_ = 10.0;
+  /** 观测噪声标准差覆盖值；<= 0 表示沿用 EKF 内部启发式 */
+  double meas_azimuth_sigma_ = -1.0;
+  double meas_distance_sigma_ = -1.0;
+  double meas_angle_sigma_ = -1.0;
+  /** UV 观测配置（enabled=false 时沿用传统世界系 ypd 观测） */
+  UvConfig uv_config_{};
+  /** 单装甲退化保护：UV 模式下半径先验标准差覆盖值 (m)；<= 0 不覆盖 */
+  double uv_radius_prior_sigma_ = -1.0;
+  /** 本帧成功执行的 EKF 校正次数 */
+  int last_update_count_ = 0;
+  /** UV 观测因缺少相机几何而回退传统路径的告警是否已打印（每轮跟踪只提示一次） */
+  bool uv_fallback_warned_ = false;
 
   /** @brief 根据本帧是否匹配目标推进跟踪状态机 @param found 是否找到匹配装甲板 */
   void state_machine(bool found);
@@ -101,10 +131,28 @@ private:
   /** @brief 使用候选装甲板更新当前目标 @param armors 候选装甲板列表 @param t 帧时间戳 @return 成功匹配时返回 true */
   bool update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t);
 
+  /** @brief 把配置中的观测噪声标准差应用到当前目标 */
+  void apply_measurement_sigmas();
+
+  /** @brief 把 UV 配置与当前相机几何应用到当前目标 */
+  void apply_uv_config();
+
+  /** @brief 解析 yaml 中的 UV 配置 */
+  void load_uv_config(const YAML::Node & yaml);
+
   /** @brief 重置周期运动采样状态 */
   void reset_fft_sample_state();
-  /** @brief 向周期运动分析器添加装甲板样本 @param armor 匹配装甲板 @param t 帧时间戳 */
+  /** @brief 向周期运动分析器添加装甲板样本 @param armor 匹配装甲板（其 xyz_in_world 须已由 PnP 写入） @param t 帧时间戳 */
   void update_fft_sample(const Armor & armor, std::chrono::steady_clock::time_point t);
+
+  /**
+   * @brief UV 观测模式下向周期运动分析器添加样本
+   * @param t 帧时间戳
+   * @note UV 模式逐帧不跑 PnP，armor.xyz_in_world 不会被写入（恒为 0），
+   *       因此改用滤波器估计的当前装甲板高度；否则 FFT 拿到全 0 的 z 序列，
+   *       周期性 z 加速度前馈会被静默关闭
+   */
+  void update_fft_sample_from_filter(std::chrono::steady_clock::time_point t);
 
   /** @brief 更新相机模式；相机切换时清空中心加速度历史 */
   void update_camera_mode(bool cam_is_short);

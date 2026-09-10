@@ -8,6 +8,7 @@ set(AUTO_AIM_SOURCES
     tracking/target.cpp
     tracking/ca_from_tju.cpp
     tracking/rv_from_fyt.cpp
+    tracking/uv_model.cpp
     tracking/tracker.cpp
     tracking/voter.cpp
     aiming/shooter.cpp

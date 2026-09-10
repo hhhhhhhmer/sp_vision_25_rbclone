@@ -40,6 +40,18 @@ public:
   /** @brief 尝试求解装甲板位姿 @param armor 待求解装甲板 @return 成功时返回 true，求解异常时返回 false */
   bool try_solve(Armor & armor) const override;
 
+  /** @brief 获取当前相机内外参与云台到世界的旋转（UV 观测使用） @return 相机几何 */
+  CameraGeometry camera_geometry() const override;
+
+  /** @brief 获取相机内参矩阵 @return 3x3 内参 */
+  const cv::Mat & camera_matrix() const { return camera_matrix_; }
+  /** @brief 获取畸变系数 @return 畸变系数向量 */
+  const cv::Mat & distort_coeffs() const { return distort_coeffs_; }
+  /** @brief 获取相机到云台的旋转 @return 旋转矩阵 */
+  const Eigen::Matrix3d & R_camera2gimbal() const { return R_camera2gimbal_; }
+  /** @brief 获取相机到云台的平移 @return 平移向量 */
+  const Eigen::Vector3d & t_camera2gimbal() const { return t_camera2gimbal_; }
+
   /** @brief 求解全向相机观测在大云台坐标系中的偏航 @param armor 待求解装甲板 @param R_camera2biggimbal_ypr 相机到大云台的欧拉角 @param t_camera2biggimbal 相机到大云台的平移 */
   void omn_dig_yaw_solve(Armor & armor,  Eigen::Vector3d R_camera2biggimbal_ypr, Eigen::Vector3d t_camera2biggimbal ) const;
 

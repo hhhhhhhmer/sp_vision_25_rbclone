@@ -85,7 +85,70 @@ Tracker::Tracker(const std::string & config_path, IArmorPoseSolver * solver)
   center_acceleration_estimator_ =
     CenterAccelerationEstimator(read_center_acceleration_config(yaml));
 
+  // 多装甲板融合：默认关闭，保持单装甲板行为；开启后同一帧可融合多块匹配装甲板
+  multi_armor_fusion_ = optional_value(yaml, "multi_armor_fusion", false);
+  multi_armor_gate_ = optional_value(yaml, "multi_armor_gate", 20.0);
+  multi_armor_angle_sigma_scale_ =
+    optional_value(yaml, "multi_armor_angle_sigma_scale", 10.0);
+  // 观测噪声标准差覆盖（rad / m / rad）；默认沿用 EKF 内部启发式
+  meas_azimuth_sigma_ = optional_value(yaml, "meas_azimuth_sigma", -1.0);
+  meas_distance_sigma_ = optional_value(yaml, "meas_distance_sigma", -1.0);
+  meas_angle_sigma_ = optional_value(yaml, "meas_angle_sigma", -1.0);
+  load_uv_config(yaml);
+
   last_cam_is_short = true;
+}
+
+void Tracker::apply_measurement_sigmas()
+{
+  target_.set_measurement_sigmas(
+    meas_azimuth_sigma_, meas_distance_sigma_, meas_angle_sigma_);
+}
+
+void Tracker::load_uv_config(const YAML::Node & yaml)
+{
+  uv_config_.enabled = optional_value(yaml, "uv_observation", false);
+  uv_config_.sigma_px = optional_value(yaml, "uv_sigma_px", uv_config_.sigma_px);
+  uv_config_.sigma_len_ratio =
+    optional_value(yaml, "uv_sigma_len_ratio", uv_config_.sigma_len_ratio);
+  uv_config_.sigma_attitude_deg =
+    optional_value(yaml, "uv_sigma_attitude_deg", uv_config_.sigma_attitude_deg);
+  uv_config_.attitude_common_ratio =
+    optional_value(yaml, "uv_attitude_common_ratio", uv_config_.attitude_common_ratio);
+  uv_config_.sigma_angle = optional_value(yaml, "uv_sigma_angle", uv_config_.sigma_angle);
+  uv_config_.associate_gate_px =
+    optional_value(yaml, "uv_associate_gate_px", uv_config_.associate_gate_px);
+  uv_config_.facing_cos_min = optional_value(yaml, "uv_facing_cos_min", uv_config_.facing_cos_min);
+  uv_config_.radius_prior_sigma =
+    optional_value(yaml, "uv_radius_prior_sigma", uv_config_.radius_prior_sigma);
+  uv_config_.process_noise_z_scale =
+    optional_value(yaml, "uv_process_noise_z_scale", uv_config_.process_noise_z_scale);
+  uv_radius_prior_sigma_ = uv_config_.radius_prior_sigma;
+}
+
+void Tracker::set_uv_enabled(bool enabled)
+{
+  if (uv_config_.enabled == enabled) return;
+  uv_config_.enabled = enabled;
+  uv_fallback_warned_ = false;
+  reset();
+  tools::logger()->info("[Tracker] observation mode -> {}", enabled ? "UV(pixel)" : "YPD(world)");
+}
+
+void Tracker::apply_uv_config()
+{
+  if (!uv_config_.enabled) return;
+  // 每帧从当前求解器取相机几何：长短焦切换时 solver_ 会换成另一台相机的求解器
+  const auto geometry = solver_->camera_geometry();
+  target_.set_uv_config(uv_config_);
+  target_.set_camera_geometry(geometry);
+  if (!geometry.valid && !uv_fallback_warned_) {
+    // 静默回退会让"以为在跑 UV"的 A/B 结论失真，因此至少警告一次
+    uv_fallback_warned_ = true;
+    tools::logger()->warn(
+      "[Tracker] uv_observation=true 但当前求解器未提供有效相机几何（内参/畸变/外参），"
+      "已回退传统 ypd 观测");
+  }
 }
 
 void Tracker::setSolver(Solver * solver)
@@ -128,6 +191,16 @@ void Tracker::update_fft_sample(
 {
   if (!fft_) return;
   fft_->add_sample(t, target_.last_id, armor.xyz_in_world.z());
+}
+
+void Tracker::update_fft_sample_from_filter(std::chrono::steady_clock::time_point t)
+{
+  if (!fft_) return;
+  const int id = target_.last_id;
+  if (id < 0) return;
+  // UV 观测模式下逐帧不跑 PnP，armor.xyz_in_world 不会被写入（恒为 0），
+  // 若照旧传 armor，FFT 会拿到全 0 的 z 序列、周期性 z 前馈被静默关闭
+  fft_->add_sample(t, id, target_.h_armor_xyz(target_.ekf_x(), id).z());
 }
 
 void Tracker::update_camera_mode(bool cam_is_short)
@@ -520,6 +593,7 @@ void Tracker::state_machine(bool found)
 
 bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
+  last_update_count_ = 0;
   if (armors.empty()) return false;
 
   const bool cam_is_short = target_.cam_is_short;
@@ -531,25 +605,34 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
                     (armor.name == ArmorName::three || armor.name == ArmorName::four ||
                      armor.name == ArmorName::five);
 
+  double radius = 0.2;
+  int armor_num = 4;
+  Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
+
   if (is_balance) {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
-    target_ = Target(armor, t, 0.2, 2, P0_dig);
+    P0_dig << 1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1;
+    radius = 0.2;
+    armor_num = 2;
   }
 
   else if (armor.name == ArmorName::outpost) {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}};
-    target_ = Target(armor, t, 0.2765, 3, P0_dig);
+    P0_dig << 1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0;
+    radius = 0.2765;
+    armor_num = 3;
   }
 
   else if (armor.name == ArmorName::base) {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0}};
-    target_ = Target(armor, t, 0.3205, 3, P0_dig);
+    P0_dig << 1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0;
+    radius = 0.3205;
+    armor_num = 3;
   }
 
-  else {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
-    target_ = Target(armor, t, 0.2, 4, P0_dig);
+  // 单装甲退化保护：UV 模式下中心深度与半径强耦合，收紧半径先验
+  if (uv_config_.enabled && uv_radius_prior_sigma_ > 0.0) {
+    P0_dig[8] = uv_radius_prior_sigma_ * uv_radius_prior_sigma_;
   }
+
+  target_ = Target(armor, t, radius, armor_num, P0_dig);
 
   target_.cam_is_short = cam_is_short;
   last_cam_is_short = cam_is_short;
@@ -562,6 +645,7 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 
   reset_fft_sample_state();
   update_fft_sample(armor, t);
+  apply_measurement_sigmas();
   return true;
 }
 bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
@@ -581,24 +665,89 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
   target_.predict(t, acceleration);
 
   bool found = false;
+  last_update_count_ = 0;
 
-  // 由于 armors 在 track/sb_track 中已经按距离图像中心的远近排序
-  // 遍历找到的第一个匹配目标的装甲板，即为视野中最居中、畸变最小的装甲板
-  for (auto & armor : armors) {
-    if (armor.name == target_.name && armor.type == target_.armor_type) {
-      if (!solver_->try_solve(armor)) continue;
-      // update 返回 false 说明观测未匹配到装甲板、EKF 未执行校正，滤波器状态没有变化，
-      // 不能算作跟踪成功，继续尝试后续装甲板
-      if (!target_.update(armor)) continue;
+  // UV 模式：把本帧所有匹配装甲板关联后做一次联合更新（内部为批量 EKF）
+  // 若求解器不提供相机几何（例如测试用的桩求解器），自动回退到传统世界系观测
+  if (uv_config_.enabled) {
+    apply_uv_config();
+  }
+  if (target_.uv_ready()) {
+    // 前哨站/基地：每帧只更新一块装甲板（与老路径一致）
+    // 若允许帧内顺序更新多块板，last_id 会在帧内来回跳，下一帧立刻触发"换板"，
+    // 前哨站高度锚点的采样窗口被压到 1~2 帧，锚点会学成 0.1×真实高度、
+    // 高度阶梯方向翻转，瞄准点随之偏 0.2~0.4m（见 Target::kTowerArmorMinAnchorSamples）
+    if (target_.name == ArmorName::outpost || target_.name == ArmorName::base) {
+      for (auto & armor : armors) {
+        if (armor.name != target_.name || armor.type != target_.armor_type) continue;
+        // 第一块（最靠近图像中心）不设门限，保持与原行为一致
+        if (!target_.update(armor, -1.0, {})) continue;
+        found = true;
+        last_update_count_ = 1;
+        if (use_center_acceleration()) {
+          const Eigen::VectorXd state = target_.ekf_x();
+          center_acceleration_estimator_.add_sample(t, {state[0], state[2]});
+        }
+        update_fft_sample_from_filter(t);
+        break;
+      }
+      return found;
+    }
 
+    const int max_armors = multi_armor_fusion_ ? 99 : 1;
+    found = target_.update_batch(armors, multi_armor_gate_, max_armors);
+    if (found) {
+      last_update_count_ = target_.last_batch_observation_count();
       if (use_center_acceleration()) {
         const Eigen::VectorXd state = target_.ekf_x();
         center_acceleration_estimator_.add_sample(t, {state[0], state[2]});
       }
+      // FFT 采样用当前主装甲板（UV 模式装甲板未经 PnP，取滤波器估计高度）
+      update_fft_sample_from_filter(t);
+    }
+    return found;
+  }
 
+  int matched = 0;
+  // 本帧已经被使用的装甲板 ID，防止两块不同的装甲板被匹配到同一个 ID 上
+  std::vector<int> used_ids;
+  // 前哨站/基地使用各自的几何匹配逻辑，暂不参与多装甲板融合
+  const bool multi_ok = multi_armor_fusion_ && target_.name != ArmorName::outpost &&
+                        target_.name != ArmorName::base;
+
+  // 由于 armors 在 track/sb_track 中已经按距离图像中心的远近排序
+  // 遍历找到的第一个匹配目标的装甲板，即为视野中最居中、畸变最小的装甲板
+  // 多装甲板融合开启后，继续把同一帧的其它匹配装甲板也送入滤波器：
+  // 第一块装甲板不设门限（保持原有行为），后续装甲板必须通过马氏距离门限且 ID 不重复，
+  // 以避免把另一台车的同名装甲板或误检融合进当前目标
+  for (auto & armor : armors) {
+    if (armor.name != target_.name || armor.type != target_.armor_type) continue;
+
+    // 已经匹配到主装甲板且本目标不参与融合时直接结束：必须在 try_solve 之前判断，
+    // 否则会白白多跑一次 PnP + 140 步 yaw 搜索（约 100~200us/帧）
+    if (matched > 0 && !multi_ok) break;
+
+    if (!solver_->try_solve(armor)) continue;
+
+    const double gate = (matched == 0) ? -1.0 : multi_armor_gate_;
+    // 第二块及之后装甲板的 PnP 朝向常因搜索窗口/镜像解而不可靠，按系数降权
+    const double angle_scale = (matched == 0) ? 1.0 : multi_armor_angle_sigma_scale_;
+    // update 返回 false 说明观测未匹配到装甲板（或被门限/已用ID拒绝）、EKF 未执行校正，
+    // 滤波器状态没有变化，不能算作跟踪成功，继续尝试后续装甲板
+    if (!target_.update(armor, gate, used_ids, angle_scale)) continue;
+
+    matched++;
+    last_update_count_ = matched;
+    found = true;
+    used_ids.push_back(target_.last_id);
+
+    // 中心加速度前馈与 FFT 采样每帧只记录一次，用最先匹配（最居中）的装甲板
+    if (matched == 1) {
+      if (use_center_acceleration()) {
+        const Eigen::VectorXd state = target_.ekf_x();
+        center_acceleration_estimator_.add_sample(t, {state[0], state[2]});
+      }
       update_fft_sample(armor, t);
-      found = true;
-      break; // 找到最优匹配后立即退出
     }
   }
 

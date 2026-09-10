@@ -102,6 +102,39 @@ void Solver::solve(Armor & armor) const
   }
 }
 
+CameraGeometry Solver::camera_geometry() const
+{
+  CameraGeometry geometry;
+  if (camera_matrix_.empty() || camera_matrix_.rows != 3 || camera_matrix_.cols != 3) {
+    return geometry;
+  }
+
+  Eigen::Matrix3d camera_matrix;
+  cv::cv2eigen(camera_matrix_, camera_matrix);
+  if (!camera_matrix.allFinite() || camera_matrix(0, 0) <= 0.0 || camera_matrix(1, 1) <= 0.0) {
+    // UV 观测用像素尺度反推深度，内参退化（fx/fy <= 0 或非有限）必须判为不可用，
+    // 否则会静默地拿一组无意义的几何去跑观测模型
+    return geometry;
+  }
+  if (
+    !R_camera2gimbal_.allFinite() || !t_camera2gimbal_.allFinite() ||
+    !R_gimbal2world_.allFinite()) {
+    return geometry;
+  }
+
+  geometry.valid = true;
+  geometry.camera_matrix = camera_matrix;
+  geometry.distort_coeffs.clear();
+  if (!distort_coeffs_.empty()) {
+    cv::Mat flat = distort_coeffs_.reshape(1, 1);
+    for (int i = 0; i < flat.cols; i++) geometry.distort_coeffs.push_back(flat.at<double>(0, i));
+  }
+  geometry.R_camera2gimbal = R_camera2gimbal_;
+  geometry.t_camera2gimbal = t_camera2gimbal_;
+  geometry.R_gimbal2world = R_gimbal2world_;
+  return geometry;
+}
+
 bool Solver::try_solve(Armor & armor) const
 {
   if (armor.points.size() != 4 ||

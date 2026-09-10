@@ -233,7 +233,8 @@ add_executable(
     tasks/auto_aim/model/armor.cpp
     tasks/auto_aim/tracking/target.cpp
     tasks/auto_aim/tracking/ca_from_tju.cpp
-    tasks/auto_aim/tracking/rv_from_fyt.cpp)
+    tasks/auto_aim/tracking/rv_from_fyt.cpp
+    tasks/auto_aim/tracking/uv_model.cpp)
 target_link_libraries(
     kf_posterior_residual_test
     ${OpenCV_LIBS}
@@ -242,9 +243,38 @@ target_link_libraries(
     tools)
 add_test(NAME kf_posterior_residual_test COMMAND kf_posterior_residual_test)
 
+add_executable(
+    uv_jacobian_test
+    tests/uv_jacobian_test.cpp
+    tasks/auto_aim/tracking/uv_model.cpp)
+target_link_libraries(uv_jacobian_test ${OpenCV_LIBS} fmt::fmt tools)
+add_test(NAME uv_jacobian_test COMMAND uv_jacobian_test)
+
+add_executable(
+    uv_filter_test
+    tests/uv_filter_test.cpp
+    tasks/auto_aim/tracking/uv_model.cpp
+    tasks/auto_aim/tracking/rv_from_fyt.cpp
+    tasks/auto_aim/model/armor.cpp)
+target_link_libraries(uv_filter_test ${OpenCV_LIBS} fmt::fmt tools)
+add_test(NAME uv_filter_test COMMAND uv_filter_test)
+
+add_executable(
+    uv_regression_test
+    tests/uv_regression_test.cpp
+    tasks/auto_aim/tracking/uv_model.cpp
+    tasks/auto_aim/tracking/rv_from_fyt.cpp
+    tasks/auto_aim/tracking/target.cpp
+    tasks/auto_aim/model/armor.cpp)
+target_link_libraries(uv_regression_test ${OpenCV_LIBS} fmt::fmt tools)
+add_test(NAME uv_regression_test COMMAND uv_regression_test)
+
 if(OPENVINO_MAKE)
     add_executable(auto_aim_test tests/auto_aim_test.cpp)
     target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+
+    add_executable(tracker_offline_bench tests/tracker_offline_bench.cpp)
+    target_link_libraries(tracker_offline_bench ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
     add_executable(auto_buff_test tests/auto_buff_test.cpp)
     target_link_libraries(auto_buff_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io)
@@ -317,6 +347,9 @@ if(TENSOR_RT_MAKE)
 
     add_executable(auto_aim_test tests/auto_aim_test.cpp)
     target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+
+    add_executable(tracker_offline_bench tests/tracker_offline_bench.cpp)
+    target_link_libraries(tracker_offline_bench ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
     add_executable(auto_aim_test_async tests/auto_aim_test_async.cpp)
     target_link_libraries(auto_aim_test_async ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)

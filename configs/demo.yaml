@@ -36,6 +36,27 @@ min_confidence: 0.8
 min_detect_count: 5
 max_temp_lost_count: 11
 outpost_max_temp_lost_count: 75
+# 多装甲板融合：同一帧把多块匹配装甲板都送入 EKF（默认 false，保持单装甲板行为）
+multi_armor_fusion: false
+# 融合第二块及之后装甲板时的马氏距离门限（4 自由度卡方，99.9% 约 18.5）
+multi_armor_gate: 20.0
+# 融合第二块及之后装甲板时，其 PnP 朝向的噪声放大系数
+multi_armor_angle_sigma_scale: 10.0
+
+# UV（像素/UVL）观测：直接用灯条端点像素做观测，逐帧不再跑 PnP+yaw 搜索，
+# PnP 只在首帧初始化时使用。详见 docs/uv_stage234_results.md。
+# 这里 uv_observation 保持 false（本文件是离线 A/B 的 base 基准），
+# 但参数都填好：在 tests/auto_aim_test.cpp 里按 u 键切到 UV 时直接生效。
+uv_observation: false
+uv_sigma_px: 1.0
+uv_sigma_len_ratio: 0.02
+uv_sigma_attitude_deg: 0.5
+uv_attitude_common_ratio: 0.0
+uv_sigma_angle: 0.1
+uv_associate_gate_px: 60.0
+uv_facing_cos_min: 0.15
+uv_radius_prior_sigma: 0.02
+uv_process_noise_z_scale: 1.0
 
 #####-----aimer参数-----#####
 yaw_offset: -0.5 # degree -2.5

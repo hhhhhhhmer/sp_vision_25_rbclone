@@ -6,6 +6,7 @@
 #include <opencv2/core.hpp>
 
 #include "armor.hpp"
+#include "camera_geometry.hpp"
 
 namespace auto_aim
 {
@@ -25,6 +26,13 @@ public:
   virtual ~IArmorPoseSolver() = default;
   /** @brief 尝试求解并写回装甲板位姿 @param armor 待求解装甲板 @return 求解成功时返回 true */
   virtual bool try_solve(Armor & armor) const = 0;
+
+  /**
+   * @brief 获取当前相机的内外参几何（UV 观测使用）
+   * @return 相机几何；求解器不支持时 valid=false
+   * @note 长短焦切换时 Tracker 会换成另一台相机的求解器，因此本接口必须能返回当前相机
+   */
+  virtual CameraGeometry camera_geometry() const { return CameraGeometry{}; }
 };
 }  // namespace auto_aim
 

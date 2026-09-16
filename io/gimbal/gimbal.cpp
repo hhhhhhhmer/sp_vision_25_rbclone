@@ -136,12 +136,19 @@ void Gimbal::omni_send(uint8_t mode, float yaw, float pitch, float distance)
 
 void Gimbal::send(io::VisionToGimbal VisionToGimbal)
 {
-  // 入参已是完整帧（head/end 由 NSDMI 提供），直接发送局部副本即可
-  // TODO: VisionToGimbal 有 crc16 字段但发送路径从未计算过，目前恒为 0。
-  //       与电控确认下行校验策略后，在此处补上：
-  //       VisionToGimbal.crc16 = tools::get_crc16(
-  //         reinterpret_cast<uint8_t *>(&VisionToGimbal),
-  //         sizeof(VisionToGimbal) - sizeof(VisionToGimbal.crc16));
+  // 下行 CRC16 —— 必须对齐下位机 communication.c 的 check_crc16(buf, 29)：
+  //   uint16_t crc = (buf[27] << 8) | buf[26];        // 即"小端存放"
+  //   return get_crc16(buf, 29 - 3) == crc;           // 注意：只算了前 26 字节
+  // 所以这里要把 CRC 放在字段 26..27（VisionToGimbal.crc16 的位置，小端）
+  // 并且**只覆盖前 26 字节**。表、初值(0xffff)、字节序两边已逐位核对一致。
+  //
+  // 注意下位机自身的不一致：它发送上行帧时是 get_crc16(buf,27) 且 CRC 在 27..28，
+  // 与 check_crc16 的读法错开一个字节。上行两个方向自洽（视觉 tools::check_crc16
+  // 用 len-2=27 覆盖 0..26、读 buf[26..27]），下行按上面的方式对齐才能通过校验。
+  // 任何一侧改了帧布局都必须同步，否则表现为"所有帧被静默丢弃"。
+  VisionToGimbal.crc16 = tools::get_crc16(
+    reinterpret_cast<uint8_t *>(&VisionToGimbal),
+    sizeof(VisionToGimbal) - sizeof(VisionToGimbal.crc16) - 1);
   write_frame(VisionToGimbal);
 }
 

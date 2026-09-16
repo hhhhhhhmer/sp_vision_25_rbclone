@@ -5,7 +5,13 @@
  * 流程：自动对 yaw/pitch 两轴依次执行
  *   1) 阶跃测试：±3°/±8°/±15°，网格搜索拟合纯死区 τ 与一阶收敛时间常数 T_cl；
  *   2) 匀速梯形波：2/4/6 rad/s（含匀速巡航段），测量稳态滞后 → 等效延迟 D(ω) ≈ τ+T；
- * 最后打印可直接写入配置文件的结果（gimbal_delay / gimbal_yaw_tau_s / ...）。
+ * 最后打印 **可直接写入配置的 `gimbal_delay`（= 等效延迟，单位秒）**，
+ * 以及各轴的 τ / T_cl 作为响应品质参考。
+ *
+ * 注意：Planner 已不再读取 τ / T_cl —— 方案 C 的"开火落地检查"因对云台真实状态
+ * 无判别力（0.5 s 时域内初始误差衰减到 1e-19，残差只反映拍数编排与真实延时之差）
+ * 已整体删除。本工具保留的价值是：产出 gimbal_delay 的实测值，并给出
+ * "稳态滞后随角速度是否线性"（D(ω) 一致性）这一电控响应品质评估。
  *
  * 用法：
  *   gimbal_calib <config.yaml> [--out records.jsonl]
@@ -446,17 +452,20 @@ int main(int argc, char ** argv)
         : "");
   }
 
-  // 单位注意：gimbal_delay / tau_s / T_cl_s 在配置里都是"秒"，
-  // 这里绝不能把 ms 混进来（否则会把 17ms 写成 17s）
+  // 单位注意：gimbal_delay 在配置里是"秒"，这里绝不能把 ms 混进来
+  // （否则会把 17ms 写成 17s）。
+  // 说明：yaw/pitch 的 τ、T_cl 已不再被 Planner 消费（方案 C 的"开火落地检查"因
+  // 对云台真实状态无判别力已删除），但保留输出用于手工评估电控响应品质：
+  // 等效延迟 D(ω) 就是稳态滞后，可直接作为 gimbal_delay 的参考值。
   std::fprintf(
     stderr,
-    "\n###### 写入配置 (configs/xxx.yaml)，单位均为秒 ######\n"
+    "\n###### gimbal_delay 写入配置 (configs/xxx.yaml)，单位为秒 ######\n"
     "gimbal_delay: %.4f\n"
+    "###### 以下为各轴响应品质参考（Planner 不再读取）######\n"
     "gimbal_yaw_tau_s: %.4f\n"
     "gimbal_yaw_T_cl_s: %.4f\n"
     "gimbal_pitch_tau_s: %.4f\n"
-    "gimbal_pitch_T_cl_s: %.4f\n"
-    "###### fire_landing_tolerance_deg 建议从 1.5 试起 ######\n",
+    "gimbal_pitch_T_cl_s: %.4f\n",
     median_tau[0] + median_T[0], median_tau[0], median_T[0], median_tau[1], median_T[1]);
 
   std::fprintf(stderr, "[记录] %s\n", out_path.c_str());

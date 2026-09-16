@@ -48,49 +48,6 @@ struct TinySolverDeleter
 
 using TinySolverHandle = std::unique_ptr<TinySolver, TinySolverDeleter>;
 
-/**
- * @brief 云台实际状态反馈（方案 C 的 MPC 初始状态来源）
- * @note yaw/pitch 单位为度（与 io::GimbalState 约定一致），角速度单位为 rad/s
- */
-struct GimbalFeedback
-{
-  double yaw_deg = 0;
-  double pitch_deg = 0;
-  double yaw_vel = 0;
-  double pitch_vel = 0;
-};
-
-/**
- * @brief 单轴云台电机响应模型：纯死区 τ + 一阶收敛 T_cl
- * 离散化（DT=10ms）：y[k+1] = a·y[k] + (1-a)·cmd[k-k_d]
- * 该模型由标定得到（阶跃/斜坡测试），用于方案 C 的开火落地检查
- */
-struct GimbalAxisModel
-{
-  double tau_s = 0.005;   // 纯死区（串口+电控接收+计算）
-  double T_cl_s = 0.012;  // 闭环收敛时间常数
-  int k_d = 1;            // 输入延时拍数 = round(tau_s / DT)
-  double a = 0.4346;      // 一阶系数 = exp(-DT / T_cl_s)
-
-  void sync() noexcept
-  {
-    // 参数自检：非法值退化为"无滞后"模型（a=0），避免 exp 溢出/NaN 污染仿真；
-    // 真正的告警在 Planner 构造里给出（那里才有 logger）
-    if (!std::isfinite(tau_s) || tau_s < 0) tau_s = 0;
-    if (!std::isfinite(T_cl_s) || T_cl_s <= 0) {
-      T_cl_s = 0;
-      a = 0.0;  // 无滞后：模型输出恒等于命令
-    } else {
-      a = std::exp(-DT / T_cl_s);
-    }
-    // k_d 只能是 DT 的整数倍：默认 tau=5ms 在 DT=10ms 下量化为 1 拍(10ms)，
-    // 属偏保守的取整（模型延时略大于真实纯死区）
-    k_d = static_cast<int>(std::lround(tau_s / DT));
-    if (k_d < 0) k_d = 0;
-    if (k_d > HORIZON / 2) k_d = HORIZON / 2;
-  }
-};
-
 class Planner
 {
 public:
@@ -113,17 +70,17 @@ public:
   /** @brief 移动赋值规划器 @param other 源规划器 @return 当前规划器 */
   Planner & operator=(Planner && other) noexcept = default;
 
-  /** @brief 使用动力学策略规划云台轨迹 @param target 跟踪目标 @param bullet_speed 弹速，单位 m/s @param fb 云台实际状态反馈 @return 云台控制计划 */
-  Plan plan(Target target, double bullet_speed, const GimbalFeedback & fb = {});
-  /** @brief 预测目标并按指定策略规划 @param target 可选跟踪目标 @param bullet_speed 弹速，单位 m/s @param gimbal_yaw 当前云台偏航角(度) @param strategy 开火策略 @param gimbal_pitch 当前云台俯仰角(度) @param gimbal_yaw_vel 云台偏航角速度(rad/s) @param gimbal_pitch_vel 云台俯仰角速度(rad/s) @return 云台控制计划；无目标时 control 为 false */
+  /** @brief 使用动力学策略规划云台轨迹 @param target 跟踪目标 @param bullet_speed 弹速，单位 m/s @return 云台控制计划
+   *  @note 不需要云台反馈：MPC 初值取参考轨迹起点，命令完全由目标决定（开火判据另见 rbShoot/rbplan） */
+  Plan plan(Target target, double bullet_speed);
+  /** @brief 预测目标并按指定策略规划 @param target 可选跟踪目标 @param bullet_speed 弹速，单位 m/s @param gimbal_yaw 当前云台偏航角(度)，仅用于开火判据 @param strategy 开火策略 @return 云台控制计划；无目标时 control 为 false
+   *  @note gimbal_yaw 是**唯一的**云台反馈入口，且只喂给开火判据（is_fire 的装甲几何窗 / SB 的 3° 粗门）；
+   *        它不进 MPC（MPC 初值取参考轨迹起点），俯仰角与角速度也不再需要 */
   inline Plan plan(
     std::optional<Target> target,
     double bullet_speed,
     double gimbal_yaw = 0,
-    ShootStrategy strategy = Dynamics,
-    double gimbal_pitch = 0,
-    double gimbal_yaw_vel = 0,
-    double gimbal_pitch_vel = 0){
+    ShootStrategy strategy = Dynamics){
 
     if (!target.has_value()) return {false};
 
@@ -138,27 +95,25 @@ public:
     
     target->predict(future);
 
-    GimbalFeedback fb{gimbal_yaw, gimbal_pitch, gimbal_yaw_vel, gimbal_pitch_vel};
-
     switch (strategy)
     {
     case Dynamics:
-      return plan(*target, bullet_speed, fb);
+      return plan(*target, bullet_speed);
     case rbSuppressiveFire:
-      return rbplan(*target, bullet_speed, fb);
+      return rbplan(*target, bullet_speed, gimbal_yaw);
     case rbHero:
       return rbHeroplan(*target, bullet_speed, gimbal_yaw);
     case SB:
-      return sbplan(*target, bullet_speed, fb);
+      return sbplan(*target, bullet_speed, gimbal_yaw);
     default:
       tools::logger()->error("Unknown shoot strategy: {}", static_cast<int>(strategy));
       return {false};
     }
   }
   /** @brief 使用步兵压制射击策略规划 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return 云台控制计划 */
-  Plan rbplan(Target target, double bullet_speed, const GimbalFeedback & fb);
+  Plan rbplan(Target target, double bullet_speed, double gimbal_yaw);
   /** @brief 使用哨兵策略规划 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return 云台控制计划 */
-  Plan sbplan(Target target, double bullet_speed, const GimbalFeedback & fb);
+  Plan sbplan(Target target, double bullet_speed, double gimbal_yaw);
   /** @brief 判断步兵策略当前是否允许开火 @param target 跟踪目标 @param gimbal_yaw 当前云台偏航角 @param tower_fixed_pitch 是否使用前哨站固定俯仰约束 @return 允许开火时返回 true */
   bool rbShoot(Target target, double gimbal_yaw,  bool tower_fixed_pitch = false);
   /** @brief 使用英雄策略规划 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return 云台控制计划 */
@@ -201,20 +156,7 @@ private:
   /** @brief 生成步兵策略预测轨迹 @param target 跟踪目标 @param yaw0 初始偏航角 @param bullet_speed 弹速 @return 规划时域轨迹 */
   Trajectory rbget_trajectory(Target target, double yaw0, double bullet_speed);
 
-  /**
-   * @brief 云台电机响应落地检查（方案 C）：用标定的一阶+延时模型模拟真实云台,
-   *        检查开火索引时刻模拟位置与参考轨迹的残差 @param traj 参考轨迹 @param yaw_x yaw MPC 状态轨迹 @param pitch_x pitch MPC 状态轨迹 @param fb 云台实际状态 @param yaw0 偏航参考零点 @param yaw_err 输出：yaw 轴模型残差(rad) @param pitch_err 输出：pitch 轴模型残差(rad)
-   */
-  void gimbal_landing_check(
-    const Trajectory & traj,
-    const Eigen::MatrixXd & yaw_x,
-    const Eigen::MatrixXd & pitch_x,
-    const GimbalFeedback & fb,
-    double yaw0,
-    double & yaw_err,
-    double & pitch_err) const;
-
-  /** @brief 将 MPC 状态写入计划（含命令模式：fire_aim / trajectory_step） @param plan 输出计划 @param yaw_x yaw MPC 状态 @param yaw_u yaw MPC 控制 @param pitch_x pitch MPC 状态 @param pitch_u pitch MPC 控制 @param yaw0 偏航参考零点 */
+  /** @brief 将 MPC 状态写入计划（取时域中心拍 = 开火时刻的瞄点/速度/加速度） @param plan 输出计划 @param yaw_x yaw MPC 状态 @param yaw_u yaw MPC 控制 @param pitch_x pitch MPC 状态 @param pitch_u pitch MPC 控制 @param yaw0 偏航参考零点 */
   void write_mpc_commands(
     Plan & plan,
     const Eigen::MatrixXd & yaw_x,
@@ -230,13 +172,6 @@ private:
 
   int shoot_offset_;
 
-  // ===== 方案 C：云台电机响应模型与开火落地检查 =====
-  GimbalAxisModel yaw_axis_model_;
-  GimbalAxisModel pitch_axis_model_;
-  /** @brief 开火落地检查容差(rad)；<0 表示关闭检查 */
-  double fire_landing_tolerance_ = -1.0;
-  /** @brief 命令模式：true=发送 MPC 轨迹步进(下一拍状态)，false=发送开火时刻瞄点(原行为) */
-  bool gimbal_command_mode_step_ = false;
 };
 
 }  // namespace auto_aim

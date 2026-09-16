@@ -79,6 +79,10 @@ uv_radius_prior_sigma: 0.02  # 单装甲退化保护：半径先验标准差 (m)
 uv_process_noise_z_scale: 1.0 # 深度过程噪声缩放；1.0 预测误差最优，0.01~0.1 深度更平滑
 
 #####-----aimer参数-----#####
+# 远距离(target_h 超阈值)时的额外 pitch 补偿(度)；Planner 必须读到该键，缺失会直接退出
+far_pitch_offset: 0
+# 远距离且目标较高时的额外 pitch 补偿(度)；同上，必须存在
+far_high_pitch_offset: 0
 yaw_offset: 0 # degree -2.5
 pitch_offset: 0 # degree 2
 comming_angle: 60 # degree

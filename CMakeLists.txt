@@ -200,6 +200,11 @@ target_link_libraries(gimbal_calib ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 
 add_executable(rbplan_smoke_test tests/rbplan_smoke_test.cpp)
 target_link_libraries(rbplan_smoke_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+# 方案 C 冒烟测试：校验 rbplan 在"真实云台状态 x0 + 提前量"下全程有限值且开火门限可达。
+# 此前只有 add_executable、没有 add_test，ctest 永远不会执行到它。
+add_test(
+    NAME rbplan_smoke_test
+    COMMAND rbplan_smoke_test ${PROJECT_SOURCE_DIR}/configs/sb_short.yaml)
 
 add_executable(plotter_test tests/plotter_test.cpp tools/plotter.cpp)
 add_test(NAME plotter_test COMMAND plotter_test)
@@ -272,6 +277,10 @@ add_test(NAME uv_regression_test COMMAND uv_regression_test)
 if(OPENVINO_MAKE)
     add_executable(auto_aim_test tests/auto_aim_test.cpp)
     target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+
+    # 离线回放：真实检测 -> Tracker -> Planner，导出上位机命令流（用于甩头归因）
+    add_executable(planner_offline_replay tests/planner_offline_replay.cpp)
+    target_link_libraries(planner_offline_replay ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
     add_executable(tracker_offline_bench tests/tracker_offline_bench.cpp)
     target_link_libraries(tracker_offline_bench ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)

@@ -59,6 +59,10 @@ uv_radius_prior_sigma: 0.02
 uv_process_noise_z_scale: 1.0
 
 #####-----aimer参数-----#####
+# 远距离(target_h 超阈值)时的额外 pitch 补偿(度)；Planner 必须读到该键，缺失会直接退出
+far_pitch_offset: 0
+# 远距离且目标较高时的额外 pitch 补偿(度)；同上，必须存在
+far_high_pitch_offset: 0
 yaw_offset: -0.5 # degree -2.5
 pitch_offset: 2 # degree 2
 comming_angle: 60 # degree

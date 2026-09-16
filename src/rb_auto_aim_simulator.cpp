@@ -687,10 +687,6 @@ int main(int argc, char * argv[])
 
     std::exception_ptr main_error;
     try {
-      // 云台反馈差分用：仿真里没有陀螺，用相邻帧 ypr 估算角速度
-      Eigen::Vector3d prev_ypr = Eigen::Vector3d::Zero();
-      std::chrono::steady_clock::time_point prev_ypr_t{};
-      bool has_prev_ypr = false;
       while (!stop_pipeline && rclcpp::ok()) {
         auto perception = perception_queue.pop();
         if (!perception) break;
@@ -702,28 +698,14 @@ int main(int argc, char * argv[])
         display_solver.set_camera2gimbal(
           frame.T_camera2gimbal.linear(), frame.T_camera2gimbal.translation());
 
-        // Planner 的云台反馈接口单位是"度"（ypr 是弧度），ypr[1] 已在采集侧翻成抬头为正
+        // Planner 的云台反馈接口单位是"度"（ypr 是弧度），且只吃偏航角——
+        // 它仅用于开火判据（装甲几何窗），不进 MPC（MPC 初值取参考轨迹起点）
         const double gimbal_yaw_deg = perception->ypr[0] * 180.0 / CV_PI;
-        const double gimbal_pitch_deg = perception->ypr[1] * 180.0 / CV_PI;
-        double gimbal_yaw_vel = 0;
-        double gimbal_pitch_vel = 0;
-        if (has_prev_ypr) {
-          const double dt =
-            std::chrono::duration<double>(frame.received_at - prev_ypr_t).count();
-          if (dt > 1e-4 && dt < 0.5) {
-            gimbal_yaw_vel = tools::limit_rad(perception->ypr[0] - prev_ypr[0]) / dt;  // rad/s
-            gimbal_pitch_vel = (perception->ypr[1] - prev_ypr[1]) / dt;
-          }
-        }
-        prev_ypr = perception->ypr;
-        prev_ypr_t = frame.received_at;
-        has_prev_ypr = true;
 
         const auto planner_begin = std::chrono::steady_clock::now();
         const auto plan = planner.plan(
           perception->target, bullet_speed, gimbal_yaw_deg,
-          auto_aim::Planner::ShootStrategy::rbSuppressiveFire, gimbal_pitch_deg,
-          gimbal_yaw_vel, gimbal_pitch_vel);
+          auto_aim::Planner::ShootStrategy::rbSuppressiveFire);
         const auto planner_end = std::chrono::steady_clock::now();
         const double planner_ms =
           std::chrono::duration<double, std::milli>(planner_end - planner_begin).count();

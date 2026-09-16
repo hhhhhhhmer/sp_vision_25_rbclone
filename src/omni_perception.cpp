@@ -12,6 +12,7 @@
 #include "tools/exiter.hpp"
 #include "tools/systemd_watchdog.hpp"
 #include "tools/logger.hpp"
+#include "tools/periodic_timer.hpp"
 #include "tools/yaml.hpp"
 
 const std::string keys =
@@ -62,6 +63,11 @@ int main(int argc, char * argv[])
     tools::logger()->warn("无法向 systemd 发送 READY 通知");
   }
 
+  // 下发节拍：固定为绝对时刻 t0 + k*1ms，周期不再等于"解算耗时 + sleep"
+  tools::tighten_timer_slack();
+  tools::PeriodicTimer tick(1ms);
+  // 1ms 是下限：单轮工作更久时 PeriodicTimer 会跳到下一个整节拍（missed() 计数）
+
   while (!exiter.exit()) {
     const auto state = gimbal.state();
     const Eigen::Vector3d gimbal_euler(state.yaw / 57.3, state.pitch / 57.3, 0.0);
@@ -71,8 +77,12 @@ int main(int argc, char * argv[])
       yolo, gimbal_euler, left_camera, right_camera, left_solver, right_solver, &target_distance);
 
     systemd_watchdog.ping();
+    // 睡到绝对节拍点后再发送：从唤醒到写出只隔一次函数调用，
+    // 因此发送间隔与解算耗时无关（超时则跳整拍，绝不连发）
+    const auto lateness = tick.wait_next();
+
     gimbal.omni_send(vision_cmd.mode, vision_cmd.yaw, vision_cmd.pitch, target_distance);
-    std::this_thread::sleep_for(1ms);
+    (void)lateness;  // 需要监控时可记入日志
   }
 
   gimbal.omni_send(0, 0.0f, 0.0f, 0.0f);

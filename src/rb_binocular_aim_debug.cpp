@@ -12,6 +12,7 @@
 #include "tools/systemd_watchdog.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/periodic_timer.hpp"
 #include "tools/plotter.hpp"
 #include "tools/recorder.hpp"
 #include "tools/yaml.hpp"
@@ -92,6 +93,10 @@ int main(int argc, char * argv[])
     auto t0 = std::chrono::steady_clock::now();
     uint16_t last_bullet_count = 0;
 
+    // 下发节拍：固定为绝对时刻 t0 + k*10ms，周期不再等于"解算耗时 + sleep"
+    tools::tighten_timer_slack();
+    tools::PeriodicTimer tick(10ms);
+
     while (!quit) {
         auto target = target_queue.front();
         auto gs = gimbal.state();
@@ -103,6 +108,10 @@ int main(int argc, char * argv[])
         auto_aim::Planner * plan_short_or_long = target->cam_is_short ? &bincameras.planners.short_aim : &bincameras.planners.long_aim;
         // auto_aim::Planner * plan_short_or_long = &short_camera_planner;
         auto plan =  plan_short_or_long->plan(target, gs.bullet_speed, gs.yaw,  auto_aim::Planner::ShootStrategy::rbSuppressiveFire);
+        // 睡到绝对节拍点后再发送：从唤醒到写出只隔一次函数调用，
+        // 因此发送间隔与解算耗时无关（超时则跳整拍，绝不连发）
+        const auto lateness = tick.wait_next();
+
         gimbal.send(
           plan.control, plan.fire, plan.yaw, plan.yaw_vel, plan.yaw_acc, plan.pitch, plan.pitch_vel,
           plan.pitch_acc);
@@ -155,10 +164,13 @@ int main(int argc, char * argv[])
 
 
 
+        data["send_late_us"] =
+          std::chrono::duration_cast<std::chrono::microseconds>(lateness).count();
+        data["send_missed"] = static_cast<double>(tick.missed());
+
         plotter.plot(data);
 
       
-        std::this_thread::sleep_for(10ms);
     }
   });
 

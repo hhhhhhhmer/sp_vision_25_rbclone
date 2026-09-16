@@ -20,6 +20,7 @@
 #include "tools/reprojection.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/periodic_timer.hpp"
 #include "tools/plotter.hpp"
 #include "tools/thread_safe_queue.hpp"
 #include "tools/recorder.hpp"
@@ -70,6 +71,10 @@ int main(int argc, char * argv[])
     
     uint16_t last_bullet_count = 0;
 
+    // 下发节拍：固定为绝对时刻 t0 + k*5ms，周期不再等于"解算耗时 + sleep"
+    tools::tighten_timer_slack();
+    tools::PeriodicTimer tick(5ms);
+
     while (!quit) {
       auto plan_t_start = std::chrono::steady_clock::now();
       auto target = target_queue.front(); 
@@ -91,6 +96,10 @@ int main(int argc, char * argv[])
         ty = target->ekf_x()[2]; 
         // tools::logger()->info("{},{},{}", name,tx,ty);
       }
+
+      // 睡到绝对节拍点后再发送：从唤醒到写出只隔一次函数调用，
+      // 因此发送间隔与解算耗时无关（超时则跳整拍，绝不连发）
+      const auto lateness = tick.wait_next();
 
       gimbal.send(
       plan.control, plan.fire,
@@ -156,10 +165,13 @@ int main(int argc, char * argv[])
           data["fft_snr"] = fft.get_signal_to_noise_ratio();
         }
         data["plan_thread_dt_s"] = tools::delta_time(plan_t_end, plan_t_start)*1000;
+        data["send_late_us"] =
+          std::chrono::duration_cast<std::chrono::microseconds>(lateness).count();
+        data["send_missed"] = static_cast<double>(tick.missed());
+
         plotter.plot(data);  
       }
       
-      std::this_thread::sleep_for(5ms);
     }
   });
 

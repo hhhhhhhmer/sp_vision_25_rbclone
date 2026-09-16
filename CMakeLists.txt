@@ -193,6 +193,11 @@ add_test(NAME thread_safe_queue_test COMMAND thread_safe_queue_test)
 add_executable(thread_pool_test tests/thread_pool_test.cpp)
 add_test(NAME thread_pool_test COMMAND thread_pool_test)
 
+# 绝对时刻周期调度器：节拍网格对齐、超时跳拍不连发、均值不受工作耗时影响
+add_executable(periodic_timer_test tests/periodic_timer_test.cpp)
+target_link_libraries(periodic_timer_test ${OpenCV_LIBS} fmt::fmt tools)
+add_test(NAME periodic_timer_test COMMAND periodic_timer_test)
+
 add_executable(plotter_replay tools/plotter_replay.cpp tools/plotter.cpp)
 
 add_executable(gimbal_calib tools/gimbal_calib.cpp)

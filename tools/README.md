@@ -60,6 +60,14 @@ EKF 用状态模型预测未来，再根据观测不确定度修正预测。角�
 
 内部使用互斥量和条件变量实现生产者/消费者同步。队列容量需要按实时性选择：视觉实时流程通常宁可丢旧帧，也不要积累高延迟。
 
+### `periodic_timer.hpp`
+
+- `PeriodicTimer(period)` + `wait_next()`：按**绝对时刻**（`t0 + k·period`）唤醒循环，周期不再等于"工作耗时 + sleep"；单轮超时不补发，直接对齐到未来整节拍。
+- `missed()`：因超时被跳过的节拍数，用于在线判断算力是否够。
+- `tighten_timer_slack()`：收紧 Linux 线程定时器松弛（默认 50 us），减少 sleep 的系统性迟到。
+
+以固定频率向下位机下发指令时必须用它替代 `std::this_thread::sleep_for`，详见 `docs/send_rate_stability.md`。
+
 ### `thread_pool.hpp`
 
 - `ThreadPool(thread_count)`：创建固定数量工作线程。

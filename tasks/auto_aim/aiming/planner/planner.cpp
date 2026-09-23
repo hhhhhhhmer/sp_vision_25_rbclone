@@ -431,7 +431,7 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   Trajectory traj;
   Eigen::Vector2d yaw_pitch;
   try {
-    yaw_pitch = aim(target, bullet_speed);
+    yaw_pitch = rbaim(target, bullet_speed);
     yaw0 = yaw_pitch(0);
     traj = rbget_trajectory(target, yaw0, bullet_speed);
   } catch (const std::exception & e) {
@@ -507,10 +507,13 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
 
 
   // 开火判断依据
-  auto is_fire = [this](const double plan_yaw, const Target& target_, bool tower_fixed_pitch){
+  // 注意：这里必须与下发命令用同一个选板（rbaim/get_aim_armor_xyzad，带滞环且帧内锁定），
+  // 否则"发的"和"判的"不是同一块板——旧版用 get_recent_armor_xyzad 的无状态口径，
+  // 会在换板临界点与参考轨迹选出不同的板。
+  auto is_fire = [this](const double plan_yaw, Target& target_, bool tower_fixed_pitch){
     bool suggest_fire = 1;
 
-    auto xyzad = target_.get_recent_armor_xyzad();
+    auto xyzad = target_.get_aim_armor_xyzad();
     Eigen::Vector4d target_armor_xyza = xyzad.head<4>();
     double target_yaw = target_armor_xyza(3) ;
     aim_target_yaw = atan2(target_armor_xyza(1), target_armor_xyza(0));//+ 0.3/57.3;
@@ -718,11 +721,11 @@ Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_sp
 }
 
 
-Eigen::Matrix<double, 2, 1> Planner::rbaim(const Target & target, double bullet_speed)
+Eigen::Matrix<double, 2, 1> Planner::rbaim(Target & target, double bullet_speed)
 {
   if (target.armor_xyza_list().empty()) throw std::runtime_error("Target has no armor pose");
 
-  Eigen::Matrix<double, 5, 1> xyzad = target.get_recent_armor_xyzad();
+  Eigen::Matrix<double, 5, 1> xyzad = target.get_aim_armor_xyzad();
   Eigen::Vector3d xyz = xyzad.head<3>();
   double yaw = xyzad(3);
   auto min_dist = xyz.head<2>().norm();

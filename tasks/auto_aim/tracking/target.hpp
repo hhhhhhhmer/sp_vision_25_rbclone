@@ -81,8 +81,36 @@ public:
   const RVfromFYT & ekf() const;
   /** @brief 计算目标全部装甲板的坐标与偏航角 @return xyza 列表 */
   std::vector<Eigen::Vector4d> armor_xyza_list() const;
-  /** @brief 获取最近装甲板的位置、偏航和距离 @return xyzad 向量 */
+  /** @brief 获取最近装甲板的位置、偏航和距离 @return xyzad 向量
+   *  @note 无状态版本：每帧按"最近板 + last_id 门限"重新决断，且不做跨帧记忆。
+   *        会逐帧抖动，新代码请用 get_aim_armor_xyzad()。 */
   Eigen::Matrix<double, 5, 1> get_recent_armor_xyzad() const;
+
+  /**
+   * @brief 选择当前该瞄的装甲板编号（带滞环、帧间记忆）
+   *
+   * 解决"布尔门限逐帧重选"导致的瞄点抖动：门限从"硬阈值开关"改为
+   * "保持当前板，除非它明显更差"。
+   *  1. 上一帧选中的板若仍可用（朝向角在 kAimHoldAngle 内），优先保持；
+   *     —— 不再用 60° 这种硬阈值来回切，只有在板确实转过头时才放手；
+   *  2. 否则优先跟踪器最近观测到的板（last_id），但它也必须"可用"，避免瞄到背面板；
+   *  3. 都不满足才回退到"离相机最近"的板；
+   *  4. 跨帧滞环：新板必须比当前板近 kAimHysteresisDist 以上才允许换板；
+   *  5. 同一帧内（update_count_ 未变）锁死已选编号——预测时域里 100 多次采样
+   *     因此始终瞄同一块板，参考轨迹不会再在时域中途换板。
+   *
+   * @param out_nearest 可选输出：本帧"离相机最近"的板编号（诊断/对照组用）
+   * @return 选中的装甲板编号；无装甲板时返回 -1
+   */
+  int select_aim_armor(int * out_nearest = nullptr) const;
+
+  /**
+   * @brief 获取"当前该瞄的装甲板"的位置、偏航与距离（带滞环、帧内锁定）
+   * @return xyzad 向量（x, y, z, armor_yaw, 距离）
+   * @note 与 get_recent_armor_xyzad() 的唯一区别就是选板规则见 select_aim_armor()。
+   *       规划器、开火判据必须用同一个本函数，否则"发的"和"判的"不是同一块板。
+   */
+  Eigen::Matrix<double, 5, 1> get_aim_armor_xyzad();
 
   /** @brief 设置观测噪声标准差，覆盖 EKF 内部启发式 @param azimuth_sigma 方位角噪声标准差 (rad) @param distance_sigma 距离噪声标准差 (m) @param angle_sigma 朝向噪声标准差 (rad) */
   void set_measurement_sigmas(double azimuth_sigma, double distance_sigma, double angle_sigma)
@@ -171,6 +199,16 @@ private:
 
   /** @brief 已计入 update_count_ 的帧时间戳（同一帧内多次校正只计一次） */
   std::chrono::steady_clock::time_point last_counted_frame_{};
+
+  // ---------------------------------------------------------------- 瞄板选择（带滞环）
+  /** @brief 保持当前板的朝向角上限：超过它才允许换板（比旧的 60° 硬门限宽，避免来回切） */
+  static constexpr double kAimHoldAngle = 100.0 / 57.3;
+  /** @brief 换板滞环：新板必须比当前板近这么多米才换（避免两块板等距时逐帧翻） */
+  static constexpr double kAimHysteresisDist = 0.03;
+  /** @brief 当前锁定的瞄板编号，-1 表示尚未选择 */
+  int aim_armor_id_ = -1;
+  /** @brief 上一次执行瞄板选择的帧号（= 当时的 update_count_）；同帧内不重选 */
+  int aim_select_frame_ = -1;
 };
 
 }  // namespace auto_aim

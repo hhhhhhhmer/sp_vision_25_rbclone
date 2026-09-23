@@ -451,6 +451,86 @@ Eigen::Matrix<double, 5, 1> Target::get_recent_armor_xyzad() const
   return result;
 }
 
+/**
+ * @brief 选择当前该瞄的装甲板编号（带滞环、帧间记忆、帧内锁定）
+ *
+ * 旧实现（见 get_recent_armor_xyzad）的问题：每帧都用"最近板 + 60° 朝向门限 + 90°/s
+ * 速度门"重新做一次布尔决断，而预测时域里会调用 100 多次，于是时域中途换板 →
+ * 参考轨迹出现离散台阶 → 下发指令逐帧跳 4~6°。
+ * 这里把门限改成"保持当前板，除非它明显更差"，并在同一帧内锁死选择。
+ */
+int Target::select_aim_armor(int * out_nearest) const
+{
+  const auto list = armor_xyza_list();
+  if (list.empty()) {
+    if (out_nearest) *out_nearest = -1;
+    return -1;
+  }
+
+  const auto x = ekf_x();
+  const int n = static_cast<int>(list.size());
+  const double center_yaw = std::atan2(x[2], x[0]);
+
+  // 本帧"离相机最近"的板：目标是"正对相机的那一块"，它的方位角随时间连续变化
+  int nearest = 0;
+  double nearest_dist = std::numeric_limits<double>::infinity();
+  for (int i = 0; i < n; i++) {
+    const double d = list[i].head<2>().norm();
+    if (d < nearest_dist) {
+      nearest_dist = d;
+      nearest = i;
+    }
+  }
+  if (out_nearest) *out_nearest = nearest;
+
+  // 朝向角：相对"指向车心的视线"的夹角（0 = 正对相机）。只作为"这块板还打不打得到"的
+  // 硬保护——不是选择规则，因此不能像旧门限那样逐帧来回切。
+  auto usable = [&](int id) {
+    return id >= 0 && id < n && std::abs(tools::limit_rad(list[id][3] - center_yaw)) < kAimHoldAngle;
+  };
+
+  // 1) 保持上一帧的板，只要它仍然可用（滞环的"保持"侧）
+  if (aim_armor_id_ >= 0 && aim_armor_id_ < n && usable(aim_armor_id_)) {
+    if (aim_armor_id_ == nearest) return aim_armor_id_;  // 本来就是最近板，直接用
+    // 2) 滞环的"换板"侧：新板必须比当前板近 kAimHysteresisDist 以上才换
+    const double held_dist = list[aim_armor_id_].head<2>().norm();
+    if (held_dist - nearest_dist < kAimHysteresisDist) return aim_armor_id_;
+    return nearest;
+  }
+
+  // 3) 上一帧的板不可用（还没选过 / 已转过头）：回退到最近的板。
+  //    跟踪器最近看到的板(last_id)只作为"最近板也不可用"时的兜底，不再优先于几何——
+  //    优先 last_id 会把瞄点锁在上一帧看到的那块板上，而它此时可能已转过 90°。
+  if (usable(nearest)) return nearest;
+  if (usable(last_id)) return last_id;
+  return nearest;
+}
+
+Eigen::Matrix<double, 5, 1> Target::get_aim_armor_xyzad()
+{
+  // 同一帧内（update_count_ 未变）不再重选：预测时域里的 100 多次采样因此共享同一块板
+  if (aim_select_frame_ != update_count_) {
+    aim_armor_id_ = select_aim_armor();
+    aim_select_frame_ = update_count_;
+  }
+
+  const auto list = armor_xyza_list();
+  if (list.empty()) {
+    Eigen::Matrix<double, 5, 1> empty = Eigen::Matrix<double, 5, 1>::Zero();
+    empty[4] = std::numeric_limits<double>::infinity();
+    return empty;
+  }
+
+  const int id = (aim_armor_id_ >= 0 && aim_armor_id_ < static_cast<int>(list.size()))
+                   ? aim_armor_id_
+                   : 0;
+  const Eigen::Vector4d & xyza = list[id];
+
+  Eigen::Matrix<double, 5, 1> result;
+  result << xyza[0], xyza[1], xyza[2], xyza[3], xyza.head<2>().norm();
+  return result;
+}
+
 // 检查滤波器半径是否发散
 bool Target::diverged() const
 {

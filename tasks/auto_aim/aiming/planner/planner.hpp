@@ -147,8 +147,10 @@ private:
 
   /** @brief 计算动力学策略瞄准角 @param target 跟踪目标 @param bullet_speed 弹速 @return yaw、pitch */
   Eigen::Matrix<double, 2, 1> aim(const Target & target, double bullet_speed);
-  /** @brief 计算步兵策略瞄准角 @param target 跟踪目标 @param bullet_speed 弹速 @return yaw、pitch */
-  Eigen::Matrix<double, 2, 1> rbaim(const Target & target, double bullet_speed);
+  /** @brief 计算步兵策略瞄准角 @param target 跟踪目标（按值语义的局部副本，选板状态可写） @param bullet_speed 弹速 @return yaw、pitch
+   *  @note 取非 const 引用：选板用 Target::get_aim_armor_xyzad()，需要写帧内锁定状态；
+   *        调用点传的都是局部副本，不会影响跟踪器内的目标。 */
+  Eigen::Matrix<double, 2, 1> rbaim(Target & target, double bullet_speed);
   /** @brief 计算英雄策略瞄准角 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return yaw、pitch */
   Eigen::Matrix<double, 2, 1> heroaim(const Target & target, double bullet_speed, double gimbal_yaw);
   /** @brief 生成动力学策略预测轨迹 @param target 跟踪目标 @param yaw0 初始偏航角 @param bullet_speed 弹速 @return 规划时域轨迹 */

@@ -36,7 +36,9 @@ PlotJuggler 工具显示这些数据。
 
 ## 推理后端
 
-OpenVINO 和 TensorRT 通过当前项目已有的互斥 CMake 选项选择，不能同时启用。
+OpenVINO 和 TensorRT 由 CMake 按 CPU 架构自动二选一（互斥，不能同时启用）：
+`aarch64`/Jetson 用 TensorRT，`x86_64` 用 OpenVINO。需要强制指定时用
+`-DSP_VISION_BACKEND=OPENVINO|TENSORRT|NONE`。
 
 - OpenVINO 直接读取 `models/model-0624.onnx`。
 - TensorRT 读取目标设备上生成的 `models/model-0624-fp16.engine`。
@@ -58,22 +60,18 @@ tasks/auto_buff/scripts/build_trt_engine.sh
 
 ## 构建示例
 
-OpenVINO：
+自动识别（x86_64 走 OpenVINO，aarch64/Jetson 走 TensorRT）：
 
 ```bash
-cmake -S . -B build-openvino \
-  -DOPENVINO_MAKE=ON \
-  -DTENSOR_RT_MAKE=OFF \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build-openvino -j2
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j2
 ```
 
-TensorRT：
+强制指定后端（例如在 x86 上编 TensorRT）：
 
 ```bash
 cmake -S . -B build-tensorrt \
-  -DOPENVINO_MAKE=OFF \
-  -DTENSOR_RT_MAKE=ON \
+  -DSP_VISION_BACKEND=TENSORRT \
   -DTENSORRT_ROOT=/path/to/TensorRT \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build-tensorrt -j2

@@ -17,4 +17,4 @@ TensorRT 从序列化 `.engine` 文件恢复优化后的网络。CPU 准备帧�
 
 异步模式复用一组预分配执行槽，避免每帧重新申请显存。每个并行任务必须拥有独立 `IExecutionContext` 和 CUDA stream，否则不同帧会互相覆盖绑定地址和输出。
 
-`0708` 和 `0526` 模型输出布局、精度类型及类别字段不同，不应共用解码函数。修改 engine 或 CUDA kernel 后，需要重新使用 `TENSOR_RT_MAKE=ON` 配置并编译。
+`0708` 和 `0526` 模型输出布局、精度类型及类别字段不同，不应共用解码函数。修改 engine 或 CUDA kernel 后，需要重新编译（后端按架构自动选，强制 TensorRT 用 `-DSP_VISION_BACKEND=TENSORRT`）。

@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake")
-
+# OpenVINO 的位置由顶层 CMakeLists 统一识别（不要再在这里写死路径覆盖 OpenVINO_DIR）
 find_package(OpenVINO REQUIRED COMPONENTS Runtime)
 
 add_library(omniperception OBJECT 

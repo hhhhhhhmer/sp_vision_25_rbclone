@@ -218,6 +218,13 @@ cmake -B build
 make -C build/ -j`nproc`
 # 或者直接按f5
 ```
+推理后端不用手动选：CMake 会按 CPU 架构自动认（`aarch64`/Jetson → TensorRT，`x86_64` → OpenVINO），
+对应的 CUDA/TensorRT/OpenVINO 没装会直接报错并提示装什么。确实要强制时：
+```bash
+cmake -B build -DSP_VISION_BACKEND=TENSORRT   # 或 OPENVINO / NONE(不编译检测后端)
+```
+TensorRT 后端的 CUDA 目标算力也会自动识别（查 `nvidia-smi` 的算力，如 8.9 → 89；比本机 nvcc
+支持的还新时会自动降到 nvcc 支持的最大值并给出警告），要覆盖就加 `-DCMAKE_CUDA_ARCHITECTURES=89`。
 
 ### 2. 运行demo:
 ```bash

@@ -15,15 +15,56 @@ list(APPEND CMAKE_MODULE_PATH ${USER_LOCAL_DIR}/lib/cmake)
 message(STATUS "--------------------CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}--------------------")
 
 
-# Backend selection. Keep OpenVINO as the default, while allowing the TensorRT
-# engine backend to be enabled from the command line without editing this file.
-option(OPENVINO_MAKE "Build the OpenVINO backend" OFF)
-option(TENSOR_RT_MAKE "Build the TensorRT backend" ON)
-option(ENABLE_GPU_TESTS "Enable TensorRT tests that require a CUDA GPU" OFF)
+# ---------------------------------------------------------------------------
+# 推理后端：按 CPU 架构自动识别，不需要再手动改 option
+#   aarch64 / arm64  (Jetson 系列)   -> TensorRT
+#   x86_64  / amd64  (x86 小电脑)    -> OpenVINO
+# 需要强制指定时使用 -DSP_VISION_BACKEND=OPENVINO / TENSORRT / NONE
+# （NONE = 不编译检测后端，只编译算法库和标定/测试工具）
+# ---------------------------------------------------------------------------
+set(SP_VISION_BACKEND "AUTO" CACHE STRING
+    "推理后端: AUTO(按 CPU 架构识别) / OPENVINO / TENSORRT / NONE")
+set_property(CACHE SP_VISION_BACKEND PROPERTY STRINGS AUTO OPENVINO TENSORRT NONE)
 
-if(OPENVINO_MAKE AND TENSOR_RT_MAKE)
-    message(FATAL_ERROR "OPENVINO_MAKE and TENSOR_RT_MAKE cannot both be enabled")
+if(SP_VISION_BACKEND STREQUAL "AUTO")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+        set(SP_VISION_BACKEND "TENSORRT")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+        set(SP_VISION_BACKEND "OPENVINO")
+    else()
+        message(FATAL_ERROR
+            "无法识别的 CPU 架构: ${CMAKE_SYSTEM_PROCESSOR}。"
+            "请用 -DSP_VISION_BACKEND=OPENVINO 或 -DSP_VISION_BACKEND=TENSORRT 手动指定后端")
+    endif()
+    message(STATUS "自动识别 CPU 架构: ${CMAKE_SYSTEM_PROCESSOR} -> ${SP_VISION_BACKEND} 后端")
 endif()
+
+# OPENVINO_MAKE / TENSOR_RT_MAKE 由 SP_VISION_BACKEND 推导，保留这两个名字是因为
+# tasks/auto_aim、tasks/auto_buff 等子目录仍按它们分支。
+if(SP_VISION_BACKEND STREQUAL "OPENVINO")
+    set(OPENVINO_MAKE ON)
+    set(TENSOR_RT_MAKE OFF)
+elseif(SP_VISION_BACKEND STREQUAL "TENSORRT")
+    set(OPENVINO_MAKE OFF)
+    set(TENSOR_RT_MAKE ON)
+elseif(SP_VISION_BACKEND STREQUAL "NONE")
+    set(OPENVINO_MAKE OFF)
+    set(TENSOR_RT_MAKE OFF)
+else()
+    message(FATAL_ERROR
+        "SP_VISION_BACKEND 只能是 AUTO / OPENVINO / TENSORRT / NONE，当前为: ${SP_VISION_BACKEND}")
+endif()
+
+# 老 build 目录里残留的 OPENVINO_MAKE/TENSOR_RT_MAKE 缓存不再生效（上面的普通变量
+# 已经覆盖它们），这里顺手清掉，避免以后误以为旧开关还管用。
+if(DEFINED CACHE{OPENVINO_MAKE} OR DEFINED CACHE{TENSOR_RT_MAKE})
+    message(STATUS
+        "清理历史缓存的 OPENVINO_MAKE/TENSOR_RT_MAKE；后端以 SP_VISION_BACKEND 为准")
+    unset(OPENVINO_MAKE CACHE)
+    unset(TENSOR_RT_MAKE CACHE)
+endif()
+
+option(ENABLE_GPU_TESTS "Enable TensorRT tests that require a CUDA GPU" OFF)
 
 find_package(OpenCV REQUIRED)
 find_package(fmt REQUIRED)
@@ -33,26 +74,181 @@ find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 if(OPENVINO_MAKE)
-    set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake/")
-    find_package(OpenVINO REQUIRED)
+    # OpenVINO 位置：命令行 -DOpenVINO_DIR=... / 环境变量优先，否则试常见安装路径
+    # （apt 装的 openvino-2024.6.0 在 /usr/lib/cmake，由 CMake 默认搜索路径找到）
+    if(NOT OpenVINO_DIR AND NOT DEFINED ENV{OpenVINO_DIR})
+        foreach(_ov_dir
+                /opt/intel/openvino2024.6.0/runtime/cmake
+                /opt/intel/openvino_2024.6.0/runtime/cmake
+                /opt/intel/openvino/runtime/cmake)
+            if(EXISTS "${_ov_dir}/OpenVINOConfig.cmake")
+                set(OpenVINO_DIR "${_ov_dir}")
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    find_package(OpenVINO REQUIRED COMPONENTS Runtime)
+    message(STATUS "使用 OpenVINO: ${OpenVINO_DIR}")
 endif()
 
 if(TENSOR_RT_MAKE)
-    set(CMAKE_CUDA_ARCHITECTURES 87 CACHE STRING "CUDA architectures for TensorRT kernels")
     set(TENSORRT_ROOT "" CACHE PATH "TensorRT SDK root (optional when installed system-wide)")
-    find_path(TENSORRT_INCLUDE_DIR NvInfer.h
-        HINTS ${TENSORRT_ROOT}
-        PATH_SUFFIXES include)
-    find_library(TENSORRT_INFER_LIBRARY nvinfer
-        HINTS ${TENSORRT_ROOT}
-        PATH_SUFFIXES lib lib64 targets/x86_64-linux-gnu/lib targets/aarch64-linux-gnu/lib)
-    find_library(TENSORRT_PLUGIN_LIBRARY nvinfer_plugin
-        HINTS ${TENSORRT_ROOT}
-        PATH_SUFFIXES lib lib64 targets/x86_64-linux-gnu/lib targets/aarch64-linux-gnu/lib)
 
-    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_INFER_LIBRARY OR NOT TENSORRT_PLUGIN_LIBRARY)
-        message(FATAL_ERROR "TensorRT headers or libraries were not found")
+    find_package(CUDAToolkit QUIET)
+    if(NOT CUDAToolkit_FOUND)
+        message(FATAL_ERROR
+            "本次识别的后端是 TensorRT（架构 ${CMAKE_SYSTEM_PROCESSOR}），但没有找到 CUDA Toolkit；"
+            "Jetson 请先刷好 JetPack，x86 请安装 CUDA Toolkit")
     endif()
+
+    # CUDA 目标算力（nvcc 的 -gencode 目标 GPU）：
+    #   1) 命令行 -DCMAKE_CUDA_ARCHITECTURES=89 优先
+    #   2) 否则查当前 GPU：nvidia-smi 的 compute_cap 8.9 -> 89（多卡取第一张）
+    #   3) 查不到再按架构兜底：aarch64(Jetson Orin) = 87；x86_64 交给 CMake 默认值
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+        set(_cuda_arch "")
+        find_program(NVIDIA_SMI_EXECUTABLE nvidia-smi)
+        if(NVIDIA_SMI_EXECUTABLE)
+            execute_process(
+                COMMAND "${NVIDIA_SMI_EXECUTABLE}" --query-gpu=compute_cap --format=csv,noheader
+                OUTPUT_VARIABLE _cuda_compute_cap
+                ERROR_QUIET
+                RESULT_VARIABLE _cuda_smi_result
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+            if(_cuda_smi_result EQUAL 0 AND _cuda_compute_cap MATCHES "^[0-9]+\\.[0-9]+")
+                string(REGEX REPLACE "\n.*" "" _cuda_compute_cap "${_cuda_compute_cap}") # 多卡只取第一张
+                string(REGEX REPLACE "^([0-9]+)\\.([0-9]+).*" "\\1\\2" _cuda_arch "${_cuda_compute_cap}")
+            endif()
+        endif()
+
+        # 卡可能比本机 nvcc 新（例：8.9 的卡 + nvcc 11.5 只支持到 8.7），直接用会
+        # "nvcc fatal: Unsupported gpu architecture"。本机还可能装了多个 nvcc
+        # （/usr/bin/nvcc 与 /usr/local/cuda/bin/nvcc 版本不同，CMake 用哪个不一定），
+        # 所以取所有候选都支持的最大算力；同时会生成 PTX，向下兼容能正常运行。
+        if(_cuda_arch)
+            set(_nvcc_candidates
+                "${CMAKE_CUDA_COMPILER}"
+                "${CUDAToolkit_NVCC_EXECUTABLE}"
+                "$ENV{CUDACXX}"
+                "$ENV{CUDA_HOME}/bin/nvcc"
+                "/usr/bin/nvcc")
+            file(GLOB _cuda_opt_bins "/usr/local/cuda*/bin/nvcc")
+            list(APPEND _nvcc_candidates ${_cuda_opt_bins})
+
+            set(_cuda_arch_max 9999) # 所有候选 nvcc 都支持的最大算力
+            set(_cuda_arch_min 0)    # 候选里最宽松的最低支持算力
+            set(_nvcc_checked "")
+            set(_nvcc_seen "")
+            foreach(_nvcc ${_nvcc_candidates})
+                if(NOT _nvcc OR NOT EXISTS "${_nvcc}")
+                    continue()
+                endif()
+                get_filename_component(_nvcc_real "${_nvcc}" REALPATH) # 同一 nvcc 可能经多个路径出现
+                if(_nvcc_real IN_LIST _nvcc_seen)
+                    continue()
+                endif()
+                list(APPEND _nvcc_seen "${_nvcc_real}")
+
+                execute_process(COMMAND "${_nvcc_real}" --list-gpu-arch
+                    OUTPUT_VARIABLE _nvcc_arch_list
+                    ERROR_QUIET
+                    RESULT_VARIABLE _nvcc_list_result)
+                if(NOT _nvcc_list_result EQUAL 0)
+                    continue() # 老 nvcc 没有 --list-gpu-arch，跳过检查
+                endif()
+
+                set(_this_min 9999)
+                set(_this_max 0)
+                string(REGEX MATCHALL "compute_([0-9]+)" _nvcc_archs "${_nvcc_arch_list}")
+                foreach(_nvcc_arch ${_nvcc_archs})
+                    string(REPLACE "compute_" "" _nvcc_arch_num "${_nvcc_arch}")
+                    if(_nvcc_arch_num GREATER _this_max)
+                        set(_this_max "${_nvcc_arch_num}")
+                    endif()
+                    if(_nvcc_arch_num LESS _this_min)
+                        set(_this_min "${_nvcc_arch_num}")
+                    endif()
+                endforeach()
+
+                if(_this_max GREATER 0)
+                    list(APPEND _nvcc_checked "${_nvcc}(compute_${_this_min}~${_this_max})")
+                    if(_this_max LESS _cuda_arch_max)
+                        set(_cuda_arch_max "${_this_max}")
+                    endif()
+                    if(_this_min GREATER _cuda_arch_min)
+                        set(_cuda_arch_min "${_this_min}")
+                    endif()
+                endif()
+            endforeach()
+
+            if(_nvcc_checked)
+                string(REPLACE ";" "  " _nvcc_checked_msg "${_nvcc_checked}")
+                if(_cuda_arch LESS _cuda_arch_min)
+                    message(FATAL_ERROR
+                        "GPU 算力 ${_cuda_arch} 已经不被本机任何 nvcc 支持（${_nvcc_checked_msg}），"
+                        "请安装对应版本的 CUDA Toolkit，或用 -DCMAKE_CUDA_ARCHITECTURES=... 手动指定")
+                elseif(_cuda_arch GREATER _cuda_arch_max)
+                    message(WARNING
+                        "GPU 算力 ${_cuda_arch} 超出本机 nvcc 支持范围（${_nvcc_checked_msg}），"
+                        "自动改用 ${_cuda_arch_max}（会一起生成 PTX，向下兼容，能正常运行）；"
+                        "想用 ${_cuda_arch} 请安装更新的 CUDA Toolkit")
+                    set(_cuda_arch "${_cuda_arch_max}")
+                endif()
+            endif()
+        endif()
+
+        if(NOT _cuda_arch AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+            set(_cuda_arch 87) # Jetson Orin
+        endif()
+
+        if(_cuda_arch)
+            set(CMAKE_CUDA_ARCHITECTURES "${_cuda_arch}" CACHE STRING "CUDA architectures for TensorRT kernels")
+            message(STATUS "自动识别 CUDA 目标算力: ${CMAKE_CUDA_ARCHITECTURES}")
+        else()
+            message(STATUS "没查到 GPU 算力，CUDA 目标算力交给 CMake 默认值（可用 -DCMAKE_CUDA_ARCHITECTURES=89 指定）")
+        endif()
+    else()
+        message(STATUS "使用指定的 CUDA 目标算力: ${CMAKE_CUDA_ARCHITECTURES}")
+    endif()
+
+    # TensorRT 位置：-DTENSORRT_ROOT=... > 环境变量 > 系统安装 > /opt/TensorRT-*
+    set(_TENSORRT_HINTS
+        ${TENSORRT_ROOT}
+        $ENV{TENSORRT_ROOT}
+        $ENV{TensorRT_ROOT}
+        /usr/src/tensorrt)
+    file(GLOB _TENSORRT_OPT_DIRS "/opt/TensorRT-*")
+    list(APPEND _TENSORRT_HINTS ${_TENSORRT_OPT_DIRS})
+
+    find_path(TENSORRT_INCLUDE_DIR NvInfer.h
+        HINTS ${_TENSORRT_HINTS}
+        PATH_SUFFIXES include
+                      include/aarch64-linux-gnu
+                      include/x86_64-linux-gnu
+                      targets/aarch64-linux-gnu/include
+                      targets/x86_64-linux-gnu/include)
+    find_library(TENSORRT_INFER_LIBRARY nvinfer
+        HINTS ${_TENSORRT_HINTS}
+        PATH_SUFFIXES lib lib64
+                      lib/aarch64-linux-gnu lib/x86_64-linux-gnu
+                      targets/x86_64-linux-gnu/lib targets/aarch64-linux-gnu/lib)
+    find_library(TENSORRT_PLUGIN_LIBRARY nvinfer_plugin
+        HINTS ${_TENSORRT_HINTS}
+        PATH_SUFFIXES lib lib64
+                      lib/aarch64-linux-gnu lib/x86_64-linux-gnu
+                      targets/x86_64-linux-gnu/lib targets/aarch64-linux-gnu/lib)
+
+    if(NOT TENSORRT_INCLUDE_DIR)
+        message(FATAL_ERROR
+            "本次识别的后端是 TensorRT（架构 ${CMAKE_SYSTEM_PROCESSOR}），但没有找到 NvInfer.h；"
+            "可用 -DTENSORRT_ROOT=<TensorRT 目录> 指定，或 -DSP_VISION_BACKEND=OPENVINO 换后端")
+    elseif(NOT TENSORRT_INFER_LIBRARY OR NOT TENSORRT_PLUGIN_LIBRARY)
+        message(FATAL_ERROR
+            "本次识别的后端是 TensorRT（架构 ${CMAKE_SYSTEM_PROCESSOR}），但没有找到 "
+            "libnvinfer / libnvinfer_plugin；可用 -DTENSORRT_ROOT=<TensorRT 目录> 指定")
+    endif()
+    message(STATUS "使用 TensorRT: ${TENSORRT_INFER_LIBRARY}")
 endif()
 
 find_package(Ceres REQUIRED)

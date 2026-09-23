@@ -52,8 +52,9 @@ Options:
   -h, --help            Show this help.
 
 Notes:
-  The repository currently hard-codes TENSOR_RT_MAKE=ON and OPENVINO_MAKE=OFF
-  in top-level CMakeLists.txt, so the default build requires CUDA + TensorRT.
+  The inference backend is picked automatically from the CPU architecture:
+  aarch64/Jetson -> TensorRT (needs CUDA + TensorRT), x86_64 -> OpenVINO.
+  Force it with cmake -DSP_VISION_BACKEND=OPENVINO|TENSORRT|NONE if needed.
   Daheng Galaxy runtime can be provided system-wide or vendored as
   io/daheng/lib/<amd64|arm64>/libgxiapi.so.
 USAGE
@@ -515,6 +516,29 @@ check_cuda() {
   return 1
 }
 
+check_openvino() {
+  local candidate
+  for candidate in "${OpenVINO_DIR:-}" \
+    /usr/lib/cmake/openvino2024.6.0 \
+    /opt/intel/openvino2024.6.0/runtime/cmake \
+    /opt/intel/openvino/runtime/cmake; do
+    if [[ -n "${candidate}" && -f "${candidate}/OpenVINOConfig.cmake" ]]; then
+      log "OpenVINO detected: ${candidate}"
+      return 0
+    fi
+  done
+
+  local openvino_config
+  openvino_config="$(find /usr /usr/local /opt -maxdepth 6 -name OpenVINOConfig.cmake -print -quit 2>/dev/null || true)"
+  if [[ -n "${openvino_config}" ]]; then
+    log "OpenVINOConfig.cmake found: ${openvino_config}"
+    return 0
+  fi
+
+  warn "OpenVINO was not found. x86_64 builds use the OpenVINO backend; install openvino-2024.6.0 or set OpenVINO_DIR."
+  return 1
+}
+
 check_ceres() {
   if pkg-config --exists ceres-solver 2>/dev/null; then
     log "Ceres detected by pkg-config: $(pkg-config --modversion ceres-solver)"
@@ -550,9 +574,25 @@ verify_dependencies() {
   have_cmd make || { warn "make not found"; failures=$((failures + 1)); }
 
   check_opencv || failures=$((failures + 1))
-  check_cuda || failures=$((failures + 1))
   check_ceres || failures=$((failures + 1))
-  check_lib libnvinfer.so "TensorRT libnvinfer.so was not found. The current CMake default requires TensorRT." || failures=$((failures + 1))
+
+  # 后端与 CMakeLists.txt 的 SP_VISION_BACKEND=AUTO 保持一致：按 CPU 架构判断
+  case "$(uname -m)" in
+    aarch64)
+      check_cuda || failures=$((failures + 1))
+      check_lib libnvinfer.so "TensorRT libnvinfer.so was not found. aarch64/Jetson builds use the TensorRT backend; install JetPack or pass -DTENSORRT_ROOT=..." || failures=$((failures + 1))
+      ;;
+    x86_64)
+      check_openvino || failures=$((failures + 1))
+      # x86 默认走 OpenVINO；只有手动 -DSP_VISION_BACKEND=TENSORRT 时才需要 CUDA/TensorRT
+      check_cuda || warn "CUDA toolkit was not found; only needed when forcing -DSP_VISION_BACKEND=TENSORRT on x86"
+      check_lib libnvinfer.so "TensorRT libnvinfer.so was not found; only needed when forcing -DSP_VISION_BACKEND=TENSORRT on x86" || true
+      ;;
+    *)
+      warn "Unsupported architecture for backend detection: $(uname -m); pass -DSP_VISION_BACKEND=... to cmake explicitly"
+      ;;
+  esac
+
   check_lib libgxiapi.so "Daheng Galaxy runtime libgxiapi.so was not found. Install Galaxy_camera.run or place libgxiapi.so under io/daheng/lib/<amd64|arm64>." || failures=$((failures + 1))
   check_lib libMvCameraControl.so "HikRobot runtime library was not found in ldconfig/common paths." || failures=$((failures + 1))
   check_lib libMVSDK.so "MindVision runtime library was not found in ldconfig/common paths." || failures=$((failures + 1))

@@ -9,7 +9,7 @@ yolov8_model_path: ../assets/yolov8.xml
 yolov5_model_path: ../assets/yolov5.xml
 trt_engine_path_0526: ../assets/0526.engine  
 device: CPU
-min_confidence: 0.8
+min_confidence: 0.6
 use_traditional: true
 
 #####-----ROI-----#####
@@ -39,15 +39,15 @@ max_temp_lost_count: 11
 outpost_max_temp_lost_count: 75
 
 #####-----aimer参数-----#####
-yaw_offset: -0.3 # degree -2.5
-pitch_offset: 0.2 # degree 2
+yaw_offset: -0.1 # degree -2.5
+pitch_offset: 0.3 # degree 2
 far_pitch_offset: 1.7
 comming_angle: 50 # degree
 leaving_angle: 0 # degree
 decision_speed: 8 # rad/s
-high_speed_delay_time: 0.017 # s
-low_speed_delay_time: 0.017 # s
-gimbal_delay: 0.002
+high_speed_delay_time: 0.013 # s
+low_speed_delay_time: 0.013 #s
+gimbal_delay: 0.001
 shoot_offset: 2
 
 #####-----shooter参数-----#####
@@ -55,10 +55,10 @@ first_tolerance: 3 # 近距离射击容差，degree
 second_tolerance: 2 # 远距离射击容差，degree
 judge_distance: 2 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
-
+ 
 camera_name: "hikrobot"
 camera_sn: "DA9492714"
-exposure_us: 4000
+exposure_us: 5000
 gain: 1
 vid_pid: "2bdf:0001"
 img_gamma: 0.5 
@@ -82,14 +82,14 @@ timestamp_offset_us: 2000 #us
 # R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
 R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0,  1]
 
-# 相机同理想情况的偏角: yaw-0.12 pitch-1.67 roll1.03 degree
-# 标定板到世界坐标系原点的水平距离: 2.45 m
-# 标定板同竖直摆放时的偏角: yaw-136.94 pitch7.50 roll0.50 degree
-R_camera2gimbal: [0.0014967439535173213, -0.029216360840928685, 0.99957199041227163, -0.99983883532349282, 0.017838968828040622, 0.0020185564430833603, -0.017890308451765934, -0.99941391597794205, -0.029184951826854662]
-t_camera2gimbal: [0.23732014733983461, -0.034641210225537157, -0.026472991892530634]
-# 重投影误差: 0.0883px
-camera_matrix: [2410.0541340076702, 0, 695.43550272286302, 0, 2401.7361049475071, 582.12928764545734, 0, 0, 1]
-distort_coeffs: [-0.026954180737693584, 0.26792283610195378, 0.0028679732819784655, -1.8240431319652759e-05, -0.50177627152485649]
+# 相机同理想情况的偏角: yaw-0.93 pitch-0.98 roll-0.41 degree
+# 标定板到世界坐标系原点的水平距离: 2.39 m
+# 标定板同竖直摆放时的偏角: yaw-95.39 pitch13.74 roll-179.56 degree
+R_camera2gimbal: [0.016435627841621128, -0.017034178278426831, 0.9997198142018745, -0.99983926852952798, -0.0074428334973912821, 0.016310773613421668, 0.007162907495557409, -0.99982720557099714, -0.017153767991354124]
+t_camera2gimbal: [0.22889731859052068, -0.04064361517559191, -0.005006485919441815]
+# 重投影误差: 0.0853px
+camera_matrix: [2370.2492646690712, 0, 683.69714476070089, 0, 2373.3909771703247, 529.92367569383634, 0, 0, 1]
+distort_coeffs: [-0.042467897411999037, 0.31837853033997093, -0.0018795519912555127, -0.003871329283332497, -0.74188003925411894]
 # _camera2gimbal第一位调yaw
 # _camera2gimbal第二位调yaw
 # _camera2gimbal第三位调pitch
@@ -121,7 +121,7 @@ fire_thresh: 0.003
 small_armor_tolerance: 0.12
 big_armor_tolerance: 0.22
 tower_and_base_armor_tolerance_: 0.10  # 26赛季前哨站和基地装甲板检测宽度
-gimbal_control_delay: 0.022 #0.08
+gimbal_control_delay: 0.0 #0.08
 tower_pitch_prediction_time: 0.05
 
 max_yaw_acc: 80
@@ -156,7 +156,7 @@ detect:
   fanblades_body_contours_max_area: 4000
   standard_fanblade_path: ./assets/standard_fanblade.jpg
 
-model: "../assets/yolo11_buff_12point_v3.onnx"
+model: "../assets/yolo11_buff_12point_v3_fp16.xml"
 buff_engine_path: "../assets/yolo11_buff_12point_v3_fp16.engine"
 buff_confidence_threshold: 0.6
 buff_keypoint_threshold: 0.3
@@ -164,7 +164,7 @@ buff_keypoint_hard_threshold: 0.15
 buff_keypoint_temporal_gate_px: 10.0
 buff_center_innovation_gate_px: 45.0
 buff_center_recovery_hits: 2
-buff_rune_radius_m: 0.700
+buff_rune_radius_m: 0.650
 buff_small_direction: 0 # 0:auto, 1/-1: force small buff prediction direction
 buff_pair_angle_gate_deg: 15
 buff_pair_ratio_min: 0.30
@@ -204,7 +204,7 @@ aim_time: 0.150         # s
 wait_time: 0.300        # s
 command_fire_gap: 0.080 # s
 fire_gap_time: 0.700   # s
-predict_time: 0.005    # s
+predict_time: 0.12    # s
 
 pattern_cols: 11      # 棋盘格每行的内角点数（格子数-1）
 pattern_rows: 8      # 棋盘格每列的内角点数（格子数-1）

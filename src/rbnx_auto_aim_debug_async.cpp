@@ -20,6 +20,7 @@
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
 #include "tools/thread_safe_queue.hpp"
+#include "tools/reprojection.hpp"
 
 using namespace std::chrono_literals;
 
@@ -117,6 +118,7 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point t;
   std::chrono::steady_clock::time_point last_t;
   int frame_count = 0;
+  tools::SystemdWatchdog systemd_watchdog;
 
   if (!systemd_watchdog.ready("Vision pipeline is ready")) {
     tools::logger()->warn("无法向 systemd 发送 READY 通知");

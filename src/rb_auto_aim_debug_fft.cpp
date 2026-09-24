@@ -32,7 +32,7 @@ using namespace tools;
 
 const std::string keys =
   "{help h usage ? |                        | 输出命令行参数说明}"
-  "{@config-path   | ../configs/sb_short.yaml | 位置参数，yaml配置文件路径 }";
+  "{@config-path   | ../configs/mouse.yaml | 位置参数，yaml配置文件路径 }";
 
 int main(int argc, char * argv[])
 {

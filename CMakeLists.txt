@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.16.3)
 
+set(CMAKE_BUILD_TYPE Release) #-O3优化
 project(sp_vision)
 
 enable_testing()
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_BUILD_TYPE Release)
+
 
 # 设置用户本地库路径(jetson 专属)
 set(USER_LOCAL_DIR $ENV{HOME}/.local)
@@ -16,8 +17,8 @@ message(STATUS "--------------------CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}-------
 
 # Backend selection. Keep OpenVINO as the default, while allowing the TensorRT
 # engine backend to be enabled from the command line without editing this file.
-option(OPENVINO_MAKE "Build the OpenVINO backend" ON)
-option(TENSOR_RT_MAKE "Build the TensorRT backend" OFF)
+option(OPENVINO_MAKE "Build the OpenVINO backend" OFF)
+option(TENSOR_RT_MAKE "Build the TensorRT backend" ON)
 
 if(OPENVINO_MAKE AND TENSOR_RT_MAKE)
     message(FATAL_ERROR "OPENVINO_MAKE and TENSOR_RT_MAKE cannot both be enabled")
@@ -76,7 +77,7 @@ add_executable(omni_perception src/omni_perception.cpp)
 add_executable(hero  src/hero.cpp)
 add_executable(rb_auto_aim_debug_async src/rb_auto_aim_debug_async.cpp)
 add_executable(rb_binocular_aim_debug_async src/rb_binocular_aim_debug_async.cpp)
-add_executable(rb_auto_aim_debug_fft  src/rb_auto_aim_debug_fft.cpp)
+
 
 
 target_link_libraries(rb_auto_aim_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
@@ -86,7 +87,7 @@ target_link_libraries(rb_binocular_aim_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp au
 target_link_libraries(hero ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(rb_auto_aim_debug_async ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 target_link_libraries(rb_binocular_aim_debug_async ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
-target_link_libraries(rb_auto_aim_debug_fft ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
+
 endif()
 
 if(OPENVINO_MAKE OR TENSOR_RT_MAKE)
@@ -94,11 +95,13 @@ add_executable(rb_auto_standard src/rb_auto_standard.cpp)
 add_executable(rb_auto_standard_debug src/rb_auto_standard_debug.cpp)
 add_executable(rb_auto_standard_async src/rb_auto_standard_async.cpp)
 add_executable(rb_auto_standard_debug_async src/rb_auto_standard_debug_async.cpp)
+add_executable(rb_auto_aim_debug_fft  src/rb_auto_aim_debug_fft.cpp)
 
 target_link_libraries(rb_auto_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(rb_auto_standard_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(rb_auto_standard_async ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(rb_auto_standard_debug_async ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
+target_link_libraries(rb_auto_aim_debug_fft ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 endif()
 # rv
 add_executable(rb_rv_aim_debug src/rb_rv_aim_debug.cpp)
@@ -189,8 +192,6 @@ target_link_libraries(planner_test_offline ${OpenCV_LIBS} fmt::fmt yaml-cpp auto
 endif()
 
 if(TENSOR_RT_MAKE)
-    add_executable(trt_camera_detect_test tests/trt_camera_detect_test.cpp)
-    target_link_libraries(trt_camera_detect_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools auto_aim io)
 
     add_executable(auto_buff_test tests/auto_buff_test.cpp)
     target_link_libraries(auto_buff_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io)

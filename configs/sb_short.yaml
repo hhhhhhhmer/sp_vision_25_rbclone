@@ -66,6 +66,19 @@ low_speed_delay_time: 0.015 # s    远 0.25
 gimbal_delay: 0.00
 shoot_offset: 2
 
+uv_observation: true
+uv_sigma_px: 1.0             # 灯条端点检测噪声 (px)
+uv_sigma_len_ratio: 0.02     # 与灯条像素长度成比例的附加端点噪声（尺度不变项）
+uv_sigma_attitude_deg: 0.5   # 云台/外参姿态误差 (deg)，等效像素加到灯条中心噪声
+uv_attitude_common_ratio: 0.0 # 姿态误差中整帧共模的比例：0=各灯条独立，1=完全共模
+uv_sigma_angle: 0.1          # 灯条角度噪声下限 (rad)
+uv_associate_gate_px: 60.0   # 灯条中心像素距离关联门限
+uv_facing_cos_min: 0.15      # 可见性判据（装甲板法线与视线夹角余弦下限）
+uv_radius_prior_sigma: 0.02  # 单装甲退化保护：半径先验标准差 (m)
+uv_process_noise_z_scale: 1.0 # 深度过程噪声缩放；1.0 预测误差最优，0.01~0.1 深度更平滑
+
+multi_armor_fusion: true
+
 #####-----shooter参数-----#####
 first_tolerance: 3 # 近距离射击容差，degree
 second_tolerance: 2 # 远距离射击容差，degree          

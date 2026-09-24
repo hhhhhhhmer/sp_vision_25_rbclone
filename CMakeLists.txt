@@ -270,6 +270,15 @@ if(OPENVINO_MAKE)
     add_subdirectory(tasks/omniperception)
 endif()
 
+# UV 观测可视化（tools/uv_overlay.cpp）依赖 auto_aim 的 Target / UvModel，因此不能放进
+# tools 库：tools 是 OBJECT 库，目标文件会进到每个链接它的目标里（capture、calibrate*、
+# uv_jacobian_test 等只链 tools+io），一旦混入就会让这些工具链不上 auto_aim 而报
+# undefined reference。这里单独建一个 OBJECT 库，只有需要画 UV 的目标才链接它。
+# 注意必须放在 add_subdirectory(tasks/auto_aim) 之后，否则 auto_aim 目标还不存在。
+add_library(uv_overlay OBJECT tools/uv_overlay.cpp)
+target_include_directories(uv_overlay PRIVATE ${PROJECT_SOURCE_DIR}/tools)
+target_link_libraries(uv_overlay PUBLIC auto_aim)
+
 
 
 ####################src###################
@@ -284,7 +293,7 @@ add_executable(rb_binocular_aim_debug_async src/rb_binocular_aim_debug_async.cpp
 
 
 
-target_link_libraries(rb_auto_aim_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
+target_link_libraries(rb_auto_aim_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io uv_overlay)
 target_link_libraries(sb_omn_aim_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io omniperception)
 target_link_libraries(omni_perception ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io omniperception)
 target_link_libraries(rb_binocular_aim_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
@@ -475,9 +484,19 @@ add_executable(
 target_link_libraries(uv_regression_test ${OpenCV_LIBS} fmt::fmt tools)
 add_test(NAME uv_regression_test COMMAND uv_regression_test)
 
+# UV 观测可视化渲染测试：直接调用 tools::draw_uv_overlay，统计绘制像素确认真画上了角点。
+# 依赖 auto_aim 的 Target/EKF，因此只在有推理后端时构建（同 auto_aim_test）。
+if(OPENVINO_MAKE OR TENSOR_RT_MAKE)
+    add_executable(uv_overlay_render_test tests/uv_overlay_render_test.cpp)
+    target_link_libraries(
+        uv_overlay_render_test
+        ${OpenCV_LIBS} fmt::fmt yaml-cpp tools uv_overlay auto_aim)
+    add_test(NAME uv_overlay_render_test COMMAND uv_overlay_render_test)
+endif()
+
 if(OPENVINO_MAKE)
     add_executable(auto_aim_test tests/auto_aim_test.cpp)
-    target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+    target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools uv_overlay io auto_aim)
 
     # 离线回放：真实检测 -> Tracker -> Planner，导出上位机命令流（用于甩头归因）
     add_executable(planner_offline_replay tests/planner_offline_replay.cpp)
@@ -556,7 +575,7 @@ if(TENSOR_RT_MAKE)
     target_link_libraries(auto_buff_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io)
 
     add_executable(auto_aim_test tests/auto_aim_test.cpp)
-    target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+    target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools uv_overlay io auto_aim)
 
     add_executable(tracker_offline_bench tests/tracker_offline_bench.cpp)
     target_link_libraries(tracker_offline_bench ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)

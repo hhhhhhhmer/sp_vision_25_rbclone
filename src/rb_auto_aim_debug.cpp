@@ -25,6 +25,7 @@
 #include "tools/plotter.hpp"
 #include "tools/thread_safe_queue.hpp"
 #include "tools/recorder.hpp"
+#include "tools/uv_overlay.hpp"
 
 using namespace std::chrono_literals;
 using namespace tools;
@@ -204,9 +205,21 @@ int main(int argc, char * argv[])
 
 
     if (!targets.empty()) {
+      const auto & target = targets.front();
       target_queue.push(targets.front());
       tools::draw_reprojection(
         img, solver, targets.front(), planner.debug_xyza, cv::Scalar(235, 206, 135));
+      // UV 观测可视化：青点=检测到的灯条端点，红十字=UV 模型预测端点，橙线=残差
+      // 注意：下面会把画面缩小到 0.5 倍，所以这里的尺寸/字号/文本坐标都按 0.5 配置
+      tools::UvOverlayConfig uv_overlay_cfg;
+      uv_overlay_cfg.scale = 0.5;
+      uv_overlay_cfg.font_scale = 0.5;
+      uv_overlay_cfg.status_pos = {10, 15};
+      uv_overlay_cfg.text_base_y = 75;
+      uv_overlay_cfg.text_line_step = 30;
+      tools::draw_uv_overlay(
+        img, target, armors, tracker.uv_enabled(), tracker.last_update_count(),
+        target.ekf().last_nis, uv_overlay_cfg);
     } else {
       target_queue.push(std::nullopt);
     }
@@ -216,6 +229,10 @@ int main(int argc, char * argv[])
     cv::imshow("reprojection", img);
     auto key = cv::waitKey(1);
     if (key == 'q') break;
+    if(key == 'u') {  // 运行时切换 UV / 传统观测，方便现场 A/B（切换后会 reset，下一帧用 PnP 重新初始化）
+      tracker.set_uv_enabled(!tracker.uv_enabled());
+      tools::logger()->info("[debug] obs mode -> {}", tracker.uv_enabled() ? "UV(pixel)" : "YPD(world)");
+    }
     if(key == 'r') {//TUDO :右键手动更改
       io::GimbalState* g_demo = gimbal.set_state_();
       g_demo->mode = !g_demo->mode;

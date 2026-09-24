@@ -535,7 +535,7 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
       
     return suggest_fire;
   };
-  plan.fire = is_fire(plan.yaw - yaw_offset_, target, false);
+  plan.fire = is_fire(gimbal_yaw/53.7 - yaw_offset_, target, false);
   // tools::logger()->warn("fire:{}", plan.fire);
   plan.target_yaw = (aim_target_yaw + yaw_offset_ )* 57.3;
 

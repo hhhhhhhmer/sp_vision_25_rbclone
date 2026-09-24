@@ -8,14 +8,14 @@ enemy_color: "auto"
 
 
 #####-----神经网络参数-----#####
-yolo_name: ov_0526
-classify_model: ../ssets/tiny_resnet.onnx
+yolo_name: yolov8
+classify_model: ../assets/tiny_resnet.onnx
 yolo11_model_path: ../assets/yolo11.xml
 yolov8_model_path: ../assets/yolov8.xml
 yolov5_model_path: ../assets/yolov5.xml
 ov_0526_model_path: ../assets/yolov5_0526.xml
 device: CPU
-min_confidence: 0.5
+min_confidence: 0.4
 yolo_score_threshold: 0.65
 yolo_nms_threshold: 0.45
 use_traditional: true
@@ -64,13 +64,13 @@ outpost_max_temp_lost_count: 75
 
 #####-----aimer参数-----##### 12mm
 yaw_offset: 1.2 # degree 
-pitch_offset: 1.2 # degree 2
+pitch_offset: 1.45 # degree 2
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 decision_speed: 8 # rad/
 
-high_speed_delay_time: 0.012 # s   远 0.25
-low_speed_delay_time: 0.012 # s    远 0.25
+high_speed_delay_time: 0.0098 # s   远 0.25
+low_speed_delay_time: 0.0098  # s    远 0.25
 far_pitch_offset: 0.9
 far_high_pitch_offset: 1.6
 
@@ -126,13 +126,13 @@ R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
 
 # #12mm camera
 # 重投影误差: 0.0673px
-camera_matrix: [3574.955237488581, 0, 594.4218292646041, 0, 3565.0980233561886, 520.9501318718007, 0, 0, 1]
-distort_coeffs: [-0.008254429018079603, 0.042329149179233985, 0.00016619794223107, -0.007085680240458775, 0.6145705110539377]
+camera_matrix: [3586.203514818048, 0, 638.5890217141614, 0, 3580.993809035559, 521.8190059521208, 0, 0, 1]
+distort_coeffs: [-0.009683587460233825, 0.17506173818041326, -0.000376909661182609, -0.0034104269008509856, 1.0046915696311975]
 # 相机同理想情况的偏角: yaw-0.28 pitch-1.10 roll-4.68 degree
 # 标定板到世界坐标系原点的水平距离: 2.93 m
 # 标定板同竖直摆放时的偏角: yaw128.69 pitch24.94 roll178.70 degree
-R_camera2gimbal: [0.0065230754278618654, -0.018809050043312465, 0.999801814923053, -0.9966531026459786, -0.0815960605312961, 0.004967483459193569, 0.08148645576478779, -0.996487984143432, -0.019278355340952867]
-t_camera2gimbal: [0.07466310992871426, 0.007958887116997182, 0.05009605137794383]
+R_camera2gimbal: [-0.01048913996046038, -0.02202982307042523, 0.999702288103001, -0.9970884399491983, -0.0752843365244023, -0.012120709292547676, 0.07552894056296422, -0.9969187306744549, -0.021176013975012314]
+t_camera2gimbal: [0.11424451957055139, -0.0027408715551243364, 0.048485158577619335]
 gimbal_y1: 1
 gimbal_p2: 2
 gimbal_r3: 3

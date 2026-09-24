@@ -26,6 +26,8 @@
 #include "tools/systemd_watchdog.hpp"
 #include "tools/thread_safe_queue.hpp"
 #include "method_set/binocular_aim.hpp"
+#include "tools/fps_solve.hpp"
+
 
 using namespace std::chrono_literals;
 
@@ -177,7 +179,7 @@ int main(int argc, char * argv[])
       }
 
       plotter.plot(data);
-      std::this_thread::sleep_for(10ms);
+      std::this_thread::sleep_for(5ms);
     }
   });
 
@@ -267,6 +269,9 @@ int main(int argc, char * argv[])
     return true;
   };
 
+  tools::fpsSolve fps_solver;
+
+
   while (!exiter.exit()) {
     if (force_long_camera_if_requested()) continue;
 
@@ -280,8 +285,8 @@ int main(int argc, char * argv[])
     const auto input_generation = binocular_aim.generation();
     const auto timestamp_offset =
       input_is_short ? short_camera.timestamp_offset : long_camera.timestamp_offset;
-    auto q = gimbal.q(t - 3ms);
-    // recorder.record(img, q, t, input_is_short ? "short" : "long");
+    auto q = gimbal.q(t - 2ms);
+    recorder.record(img, q, t, input_is_short ? "short" : "long");
     if (last_t != std::chrono::steady_clock::time_point{}) {
       const auto elapsed_us =
         std::chrono::duration_cast<std::chrono::microseconds>(t - last_t).count();
@@ -290,6 +295,13 @@ int main(int argc, char * argv[])
       }
     }
     last_t = t;
+
+    auto now = std::chrono::steady_clock::now();
+    const double fps = fps_solver.update(now);
+    const double mean_fps = fps_solver.get_mean_fps();
+
+    tools::draw_text(img, "mean_fps: "+std::to_string(mean_fps), cv::Point(40, 160), {0, 0, 244});
+    // tools::logger()->info("capture mean_fps: {:.2f}", mean_fps);
 
     pending_frames.push_back({t, input_is_short, input_generation});
     auto yolo_frame = yolo.detect(auto_aim::YOLOFrameData(img, q, t), frame_count++);
@@ -454,8 +466,8 @@ int main(int argc, char * argv[])
     cv::resize(img, img, {}, 0.5, 0.5);
     cv::imshow("reprojection", img);
     const auto key = cv::waitKey(1);
-    if (key == 'q') break;
-    if (key == 'c') binocular_aim.Switch(frame_tracker, true, false);
+    // if (key == 'q') break;
+    // if (key == 'c') binocular_aim.Switch(frame_tracker, true, false);
   }
 
   if (fft_thread.joinable()) fft_thread.join();

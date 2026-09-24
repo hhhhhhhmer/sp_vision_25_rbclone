@@ -19,7 +19,7 @@ namespace auto_aim
 namespace
 {
 constexpr std::array<Color, 4> MODEL_COLORS = {
-  Color::red, Color::blue, Color::extinguish, Color::purple};
+  Color::blue, Color::red, Color::extinguish, Color::purple};
 constexpr std::array<ArmorName, 9> MODEL_NAMES = {
   ArmorName::sentry, ArmorName::one,  ArmorName::two,  ArmorName::three, ArmorName::four,
   ArmorName::five,   ArmorName::outpost, ArmorName::base, ArmorName::base};

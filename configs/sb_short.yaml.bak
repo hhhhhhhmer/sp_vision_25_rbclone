@@ -13,9 +13,10 @@ yolo11_model_path: ../assets/yolo11.xml
 yolov8_model_path: ../assets/yolov8.xml
 yolov5_model_path: ../assets/yolov5.xml
 tensorrt_engine_path: ../assets/0708_int8_calib.engine
+ov_0526_model_path: ../assets/yolov5_0526.xml
 # tensorrt_engine_path: ../assets/0708_fp16_super.engine
 device: CPU
-min_confidence: 0.5
+min_confidence: 0.4
 use_traditional: true
 
 #####-----ROI-----#####
@@ -53,14 +54,15 @@ outpost_max_temp_lost_count: 75
 
 
 #####-----aimer参数-----##### 12mm
-yaw_offset: 0.73 # degree -2.5
-pitch_offset: 1.7 # degree 2
-far_pitch_offset: 1.7
+yaw_offset: 1.1 # degree -2.5
+pitch_offset: 1.1 # degree 2
+far_pitch_offset: 1.2
+far_high_pitch_offset: 1.7
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 decision_speed: 8 # rad/s
-high_speed_delay_time: 0.015 # s   远 0.25
-low_speed_delay_time: 0.015 # s    远 0.25
+high_speed_delay_time: 0.017 # s   远 0.25
+low_speed_delay_time: 0.017 # s    远 0.25
 gimbal_delay: 0.00
 shoot_offset: 2
 
@@ -70,55 +72,46 @@ second_tolerance: 2 # 远距离射击容差，degree
 judge_distance: 2 #距离判断阈值
 auto_fire: true # 是否由自瞄控制射击
 
-# #12mm camera
-# camera_name: "hikrobot"
-# camera_sn: "DA7188447"
-# exposure_us: 5000
-# gain: 0.7
-# vid_pid: "2bdf:0001"
-# flip: true
-# mirror: true
-# timestamp_offset_us: 1000 #uspy8
 
-# 6mm camera
+# # 6mm camera
 camera_name: "daheng"
 camera_sn: "KE0210030295"
-exposure_us: 12000
-gain: 0.7
+exposure_us: 4000
+gain: 1
 gamma: 1      
-img_gamma: 1
+img_gamma: 0.5
 vid_pid: "2bdf:0001"
 flip: true
 mirror: true
 timestamp_offset_us: 4318 #us 2300
 
+# 6mm camera
 # camera_name: "daheng"
-# camera_sn: "FDN24040486"
-# exposure_us: 4000
-# gain: 0.5
-# gamma: 0.5
-# vid_pid: "2ba2:4d55"
+# camera_sn: "KE0210030295"
+# exposure_us: 2000
+# gain: 1
+# gamma: 1      
+# img_gamma: 0.5
+# vid_pid: "2bdf:0001"
 # flip: true
 # mirror: true
-# timestamp_offset_us: 1000 #us
+# timestamp_offset_us: 4318 #us 2300
 
-# -1  0  0
-#  0 -1  0
-#  0  0  1
-# R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
-# R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
 
 #6mm camera
 R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
 
-# 重投影误差: 0.0832px
-camera_matrix: [1284.7904823206616, 0, 625.3390082575879, 0, 1284.3534116242304, 499.756410904147, 0, 0, 1]
-distort_coeffs: [-0.0750454909763737, 0.1498849701480074, 0.0004963244831437462, -3.867001639218003e-05, -0.038089791852694295]
-# 相机同理想情况的偏角: yaw0.52 pitch-1.50 roll-4.00 degree
-# 标定板到世界坐标系原点的水平距离: 1.57 m
-# 标定板同竖直摆放时的偏角: yaw82.07 pitch15.41 roll-0.97 degree
-R_camera2gimbal: [-0.0073103512093771455, -0.02682918605501885, 0.9996133020027401, -0.99754399716833, -0.06944124567154426, -0.009158990829531274, 0.06966012114995743, -0.9972252043421335, -0.026255653603820702]
-t_camera2gimbal: [0.12086136238352153, 0.03479496505655587, 0.037380967871420756]
+# 重投影误差: 0.0963px
+camera_matrix: [1732.3678289910022, 0, 613.9932180523726, 0, 1732.0579415122268, 524.5399763617537, 0, 0, 1]
+distort_coeffs: [-0.05323868790164575, 0.16832813098434668, 0.0019053929187075648, -0.0008072404997607934, -0.10673746357477354]
+
+# 相机同理想情况的偏角: yaw0.34 pitch-1.44 roll-3.66 degree
+# 标定板到世界坐标系原点的水平距离: 1.91 m
+# 标定板同竖直摆放时的偏角: yaw121.94 pitch17.27 roll178.56 degree
+R_camera2gimbal: [-0.004321131683590114, -0.025380780770480747, 0.999668516953722, -0.9979533667157046, -0.06367032214808917, -0.00593025617906931, 0.06379973104773956, -0.9976481875115294, -0.02505370777343582]
+t_camera2gimbal: [0.12932896347269082, 0.03856601979737109, 0.04380709409484882]
+
+
 # reprojection error: 0.115 px
 
 # _camera2gimbal第一位调yaw
@@ -158,7 +151,7 @@ gimbal_r3: 3
 target_dist_error: 0
 target_h_error: 0
 fire_thresh: 0.003 # 
-small_armor_tolerance: 0.12
+small_armor_tolerance: 0.15
 big_armor_tolerance: 0.22
 tower_and_base_armor_tolerance_: 0.10  # 26赛季前哨站和基地装甲板检测宽度
 gimbal_control_delay: 0.0

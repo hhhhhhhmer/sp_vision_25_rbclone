@@ -83,34 +83,43 @@ public:
   std::vector<Eigen::Vector4d> armor_xyza_list() const;
   /** @brief 获取最近装甲板的位置、偏航和距离 @return xyzad 向量
    *  @note 无状态版本：每帧按"最近板 + last_id 门限"重新决断，且不做跨帧记忆。
-   *        会逐帧抖动，新代码请用 get_aim_armor_xyzad()。 */
+   *        会逐帧抖动，仅供遗留策略（英雄）使用；新代码请用
+   *        select_aim_armor() + aim_armor_xyzad()。 */
   Eigen::Matrix<double, 5, 1> get_recent_armor_xyzad() const;
 
   /**
-   * @brief 选择当前该瞄的装甲板编号（带滞环、帧间记忆）
+   * @brief 选择当前该瞄的装甲板编号（纯函数：滞环的"保持侧"由调用方传入的 held_id 提供）
    *
    * 解决"布尔门限逐帧重选"导致的瞄点抖动：门限从"硬阈值开关"改为
    * "保持当前板，除非它明显更差"。
-   *  1. 上一帧选中的板若仍可用（朝向角在 kAimHoldAngle 内），优先保持；
+   *  1. 持有的板若仍可用（朝向角在 kAimHoldAngle 内），优先保持；
    *     —— 不再用 60° 这种硬阈值来回切，只有在板确实转过头时才放手；
    *  2. 否则优先跟踪器最近观测到的板（last_id），但它也必须"可用"，避免瞄到背面板；
    *  3. 都不满足才回退到"离相机最近"的板；
-   *  4. 跨帧滞环：新板必须比当前板近 kAimHysteresisDist 以上才允许换板；
-   *  5. 同一帧内（update_count_ 未变）锁死已选编号——预测时域里 100 多次采样
-   *     因此始终瞄同一块板，参考轨迹不会再在时域中途换板。
+   *  4. 跨帧滞环：新板必须比当前板近 kAimHysteresisDist 以上才允许换板。
    *
-   * @param out_nearest 可选输出：本帧"离相机最近"的板编号（诊断/对照组用）
+   * @param held_id 当前持有的装甲板编号（-1 = 尚未选择）。返回值就是"本帧应持有的板"，
+   *        调用方必须把它存进**跨帧存活**的对象里，下一帧再传回来，滞环才会生效。
+   * @param out_nearest 可选输出：同一次调用下"离相机最近"的板编号（诊断/对照组用）
    * @return 选中的装甲板编号；无装甲板时返回 -1
+   *
+   * @note 选板状态过去存在 Target 内部（aim_armor_id_），但 Target 在下发链路上是逐层
+   *       按值拷贝的（tracker → queue → plan(optional<Target>) → rbplan），写在拷贝上的
+   *       状态下一帧就丢了，滞环/保持侧永远不生效（等价于纯 argmin）。因此状态上移到
+   *       唯一跨帧存活的 Planner，本函数只保留无状态的规则。
+   * @note "同一帧内不重选"（预测时域里 100 多次采样必须瞄同一块板）由调用方按
+   *       (目标编号 uuid, update_count_) 去重实现，见 Planner::aim_armor_xyzad()。
    */
-  int select_aim_armor(int * out_nearest = nullptr) const;
+  int select_aim_armor(int held_id, int * out_nearest = nullptr) const;
 
   /**
-   * @brief 获取"当前该瞄的装甲板"的位置、偏航与距离（带滞环、帧内锁定）
-   * @return xyzad 向量（x, y, z, armor_yaw, 距离）
-   * @note 与 get_recent_armor_xyzad() 的唯一区别就是选板规则见 select_aim_armor()。
-   *       规划器、开火判据必须用同一个本函数，否则"发的"和"判的"不是同一块板。
+   * @brief 取指定编号装甲板的位置、偏航与距离
+   * @param id 装甲板编号（select_aim_armor() 的返回值）
+   * @return xyzad 向量（x, y, z, armor_yaw, 距离）；目标无装甲板或编号非法时返回
+   *         距离为 infinity 的空结果
+   * @note 规划器下发命令与开火判据必须用同一个 id，否则"发的"和"判的"不是同一块板。
    */
-  Eigen::Matrix<double, 5, 1> get_aim_armor_xyzad();
+  Eigen::Matrix<double, 5, 1> aim_armor_xyzad(int id) const;
 
   /** @brief 设置观测噪声标准差，覆盖 EKF 内部启发式 @param azimuth_sigma 方位角噪声标准差 (rad) @param distance_sigma 距离噪声标准差 (m) @param angle_sigma 朝向噪声标准差 (rad) */
   void set_measurement_sigmas(double azimuth_sigma, double distance_sigma, double angle_sigma)
@@ -131,6 +140,14 @@ public:
 
   /** @brief 检查目标是否完成初始化 @return 已初始化时返回 true */
   bool checkinit();
+
+  /**
+   * @brief 目标实例唯一编号
+   *
+   * 每次构造递增，拷贝/赋值保持不变。供下游（Planner 的选板滞环）判断"目标是否被换过"：
+   * 换目标时必须清零滞环记忆，否则会拿上一台车的持板编号当本车的先验。
+   */
+  std::size_t uuid() const { return uuid_; }
 
   /** @brief 获取 EKF 状态估计 @return 状态向量副本 */
   inline Eigen::VectorXd getEKFXest() {
@@ -200,15 +217,16 @@ private:
   /** @brief 已计入 update_count_ 的帧时间戳（同一帧内多次校正只计一次） */
   std::chrono::steady_clock::time_point last_counted_frame_{};
 
-  // ---------------------------------------------------------------- 瞄板选择（带滞环）
+  // ---------------------------------------------------------------- 瞄板选择（规则参数）
   /** @brief 保持当前板的朝向角上限：超过它才允许换板（比旧的 60° 硬门限宽，避免来回切） */
   static constexpr double kAimHoldAngle = 100.0 / 57.3;
   /** @brief 换板滞环：新板必须比当前板近这么多米才换（避免两块板等距时逐帧翻） */
-  static constexpr double kAimHysteresisDist = 0.03;
-  /** @brief 当前锁定的瞄板编号，-1 表示尚未选择 */
-  int aim_armor_id_ = -1;
-  /** @brief 上一次执行瞄板选择的帧号（= 当时的 update_count_）；同帧内不重选 */
-  int aim_select_frame_ = -1;
+  static constexpr double kAimHysteresisDist = 0.05;
+
+  /** @brief 唯一编号生成器（构造 Target 时取号） */
+  static std::size_t next_uuid();
+  /** @brief 本实例的唯一编号，见 uuid() */
+  std::size_t uuid_ = 0;
 };
 
 }  // namespace auto_aim

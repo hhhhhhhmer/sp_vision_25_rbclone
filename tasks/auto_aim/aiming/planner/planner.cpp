@@ -51,6 +51,11 @@ Planner::Planner(const Planner & other) : Planner(other.config_path_)
   last_selected_xyz = other.last_selected_xyz;
   outpost_z_stable_start_time_ = other.outpost_z_stable_start_time_;
   outpost_is_make = other.outpost_is_make;
+  // 选板滞环记忆必须跟着复制：否则"复制出来的规划器"第一帧就退化成纯 argmin
+  aim_armor_id_ = other.aim_armor_id_;
+  aim_target_uuid_ = other.aim_target_uuid_;
+  aim_eval_update_count_ = other.aim_eval_update_count_;
+  aim_debug_ = other.aim_debug_;
 }
 
 
@@ -507,13 +512,15 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
 
 
   // 开火判断依据
-  // 注意：这里必须与下发命令用同一个选板（rbaim/get_aim_armor_xyzad，带滞环且帧内锁定），
-  // 否则"发的"和"判的"不是同一块板——旧版用 get_recent_armor_xyzad 的无状态口径，
-  // 会在换板临界点与参考轨迹选出不同的板。
+  // 注意：这里必须与下发命令用同一块板——直接取本帧锁定的 aim_armor_id_（见 aim_armor_xyzad），
+  // 不在这个拷贝上重新选板，否则"发的"和"判的"会在换板临界点选到不同的板。
+  // 旧版用 get_recent_armor_xyzad 的无状态口径，就是这个毛病。
   auto is_fire = [this](const double plan_yaw, Target& target_, bool tower_fixed_pitch){
+    // 没有锁定瞄板（理论上到不了这里）时判为不许开火：宁可不开，也不要用 0 号板凑数
+    if (aim_armor_id_ < 0) return false;
     bool suggest_fire = 1;
 
-    auto xyzad = target_.get_aim_armor_xyzad();
+    auto xyzad = target_.aim_armor_xyzad(aim_armor_id_);
     Eigen::Vector4d target_armor_xyza = xyzad.head<4>();
     double target_yaw = target_armor_xyza(3) ;
     aim_target_yaw = atan2(target_armor_xyza(1), target_armor_xyza(0));//+ 0.3/57.3;
@@ -721,11 +728,35 @@ Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_sp
 }
 
 
-Eigen::Matrix<double, 2, 1> Planner::rbaim(Target & target, double bullet_speed)
+Eigen::Matrix<double, 5, 1> Planner::aim_armor_xyzad(const Target & target)
+{
+  // 换目标：滞环记忆清零，否则会拿上一台车的持板编号当本车的先验
+  if (aim_target_uuid_ != target.uuid()) {
+    aim_target_uuid_ = target.uuid();
+    aim_armor_id_ = -1;
+    aim_eval_update_count_ = -1;
+  }
+
+  // 每帧（update_count_ 变化）用当前状态重选一次；预测时域里的其余 100 多次调用直接复用，
+  // 参考轨迹因此不会在时域中途换板。
+  if (aim_eval_update_count_ != target.update_count_) {
+    int nearest = -1;
+    aim_armor_id_ = target.select_aim_armor(aim_armor_id_, &nearest);
+    aim_eval_update_count_ = target.update_count_;
+    aim_debug_.held = aim_armor_id_;
+    aim_debug_.nearest = nearest;
+    aim_debug_.hold_engaged = (aim_armor_id_ >= 0 && aim_armor_id_ != nearest);
+  }
+
+  return target.aim_armor_xyzad(aim_armor_id_);
+}
+
+
+Eigen::Matrix<double, 2, 1> Planner::rbaim(const Target & target, double bullet_speed)
 {
   if (target.armor_xyza_list().empty()) throw std::runtime_error("Target has no armor pose");
 
-  Eigen::Matrix<double, 5, 1> xyzad = target.get_aim_armor_xyzad();
+  Eigen::Matrix<double, 5, 1> xyzad = aim_armor_xyzad(target);
   Eigen::Vector3d xyz = xyzad.head<3>();
   double yaw = xyzad(3);
   auto min_dist = xyz.head<2>().norm();

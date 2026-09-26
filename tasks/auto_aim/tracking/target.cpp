@@ -1,6 +1,7 @@
 #include "target.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -10,6 +11,12 @@
 
 namespace auto_aim
 {
+
+std::size_t Target::next_uuid()
+{
+  static std::atomic<std::size_t> counter{0};
+  return ++counter;
+}
 
 Target::Target()
 : name(ArmorName::not_armor),
@@ -23,7 +30,8 @@ Target::Target()
   switch_count_(0),
   is_switch_(false),
   is_converged_(false),
-  t_(std::chrono::steady_clock::now())
+  t_(std::chrono::steady_clock::now()),
+  uuid_(next_uuid())
 {
 }
 
@@ -40,7 +48,8 @@ Target::Target(
   switch_count_(0),
   is_switch_(false),
   is_converged_(false),
-  t_(t)
+  t_(t),
+  uuid_(next_uuid())
 {
   auto r = radius;
   const Eigen::VectorXd & xyz = armor.xyz_in_world;
@@ -89,7 +98,8 @@ Target::Target(double x, double vyaw, double radius, double h)
   switch_count_(0),
   is_switch_(false),
   is_converged_(false),
-  t_(std::chrono::steady_clock::now())
+  t_(std::chrono::steady_clock::now()),
+  uuid_(next_uuid())
 {
   Eigen::VectorXd x0 = Eigen::VectorXd::Zero(11);
   x0 << x, 0, 0, 0, 0, 0, 0, vyaw, radius, 0, h;
@@ -452,14 +462,18 @@ Eigen::Matrix<double, 5, 1> Target::get_recent_armor_xyzad() const
 }
 
 /**
- * @brief 选择当前该瞄的装甲板编号（带滞环、帧间记忆、帧内锁定）
+ * @brief 选择当前该瞄的装甲板编号（纯函数：滞环的"保持侧"由 held_id 提供）
  *
  * 旧实现（见 get_recent_armor_xyzad）的问题：每帧都用"最近板 + 60° 朝向门限 + 90°/s
  * 速度门"重新做一次布尔决断，而预测时域里会调用 100 多次，于是时域中途换板 →
  * 参考轨迹出现离散台阶 → 下发指令逐帧跳 4~6°。
- * 这里把门限改成"保持当前板，除非它明显更差"，并在同一帧内锁死选择。
+ * 这里把门限改成"保持当前板，除非它明显更差"。
+ *
+ * @note held_id 必须来自**跨帧存活**的对象（Planner）。以前这份状态存在 Target 内部，
+ *       但 Target 在下发链路上是逐层按值拷贝的，写在拷贝上的状态下一帧就丢了 ——
+ *       于是"保持侧"从未生效，实际行为等价于纯 argmin 最近板。
  */
-int Target::select_aim_armor(int * out_nearest) const
+int Target::select_aim_armor(int held_id, int * out_nearest) const
 {
   const auto list = armor_xyza_list();
   if (list.empty()) {
@@ -490,11 +504,11 @@ int Target::select_aim_armor(int * out_nearest) const
   };
 
   // 1) 保持上一帧的板，只要它仍然可用（滞环的"保持"侧）
-  if (aim_armor_id_ >= 0 && aim_armor_id_ < n && usable(aim_armor_id_)) {
-    if (aim_armor_id_ == nearest) return aim_armor_id_;  // 本来就是最近板，直接用
+  if (held_id >= 0 && held_id < n && usable(held_id)) {
+    if (held_id == nearest) return held_id;  // 本来就是最近板，直接用
     // 2) 滞环的"换板"侧：新板必须比当前板近 kAimHysteresisDist 以上才换
-    const double held_dist = list[aim_armor_id_].head<2>().norm();
-    if (held_dist - nearest_dist < kAimHysteresisDist) return aim_armor_id_;
+    const double held_dist = list[held_id].head<2>().norm();
+    if (held_dist - nearest_dist < kAimHysteresisDist) return held_id;
     return nearest;
   }
 
@@ -506,26 +520,16 @@ int Target::select_aim_armor(int * out_nearest) const
   return nearest;
 }
 
-Eigen::Matrix<double, 5, 1> Target::get_aim_armor_xyzad()
+Eigen::Matrix<double, 5, 1> Target::aim_armor_xyzad(int id) const
 {
-  // 同一帧内（update_count_ 未变）不再重选：预测时域里的 100 多次采样因此共享同一块板
-  if (aim_select_frame_ != update_count_) {
-    aim_armor_id_ = select_aim_armor();
-    aim_select_frame_ = update_count_;
-  }
-
   const auto list = armor_xyza_list();
-  if (list.empty()) {
+  if (list.empty() || id < 0 || id >= static_cast<int>(list.size())) {
     Eigen::Matrix<double, 5, 1> empty = Eigen::Matrix<double, 5, 1>::Zero();
     empty[4] = std::numeric_limits<double>::infinity();
     return empty;
   }
 
-  const int id = (aim_armor_id_ >= 0 && aim_armor_id_ < static_cast<int>(list.size()))
-                   ? aim_armor_id_
-                   : 0;
   const Eigen::Vector4d & xyza = list[id];
-
   Eigen::Matrix<double, 5, 1> result;
   result << xyza[0], xyza[1], xyza[2], xyza[3], xyza.head<2>().norm();
   return result;

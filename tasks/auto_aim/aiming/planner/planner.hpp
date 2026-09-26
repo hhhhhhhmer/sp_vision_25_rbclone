@@ -118,6 +118,25 @@ public:
   bool rbShoot(Target target, double gimbal_yaw,  bool tower_fixed_pitch = false);
   /** @brief 使用英雄策略规划 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return 云台控制计划 */
   Plan rbHeroplan(Target target, double bullet_speed, double gimbal_yaw); 
+
+  /**
+   * @brief 最近一次选板的诊断信息（供离线探针/上车日志核对滞环是否真的生效）
+   *
+   * held 与 nearest 是同一次调用、同一状态下的两个结果：hold_engaged = (held != nearest)
+   * 表示"保持侧"（滞环）真的压住了纯 argmin 最近板。整段跟踪里 hold_engaged 一次都不出现，
+   * 就说明选板状态又丢了（历史 bug：状态存在 Target 里，被按值拷贝丢光，实测恒为 0 次）。
+   */
+  struct AimSelectionDebug
+  {
+    int held = -1;              // 实际选中的板
+    int nearest = -1;           // 同状态下纯"离相机最近"的板
+    bool hold_engaged = false;  // 本次选板是否靠滞环保持住了非最近板
+  };
+  /** @brief 获取最近一次选板诊断 @return 诊断信息 */
+  AimSelectionDebug aim_selection_debug() const { return aim_debug_; }
+  /** @brief 获取当前持有的瞄板编号（-1 = 未选） @return 装甲板编号 */
+  int aim_armor_id() const { return aim_armor_id_; }
+
 private:
   bool is_far = false;
   bool is_high = false;
@@ -140,6 +159,16 @@ private:
   int last_selected_idx = -1;
   Eigen::Vector3d last_selected_xyz = Eigen::Vector3d::Zero();
 
+  // ------------------------------------------------------- 瞄板选择（跨帧滞环记忆）
+  /** @brief 当前持有的瞄板编号（-1 = 尚未选择），见 aim_armor_xyzad() */
+  int aim_armor_id_ = -1;
+  /** @brief 上述编号所属目标的 uuid()；变化即换目标，滞环记忆清零 */
+  std::size_t aim_target_uuid_ = 0;
+  /** @brief 上述编号是在哪个 update_count_ 上评估的；变化即新的一帧，允许重新评估 */
+  int aim_eval_update_count_ = -1;
+  /** @brief 最近一次选板的诊断信息，见 aim_selection_debug() */
+  AimSelectionDebug aim_debug_{};
+
   /** @brief 初始化偏航轴 MPC 求解器 @param config_path YAML 配置路径 */
   void setup_yaw_solver(const std::string & config_path);
   /** @brief 初始化俯仰轴 MPC 求解器 @param config_path YAML 配置路径 */
@@ -147,16 +176,34 @@ private:
 
   /** @brief 计算动力学策略瞄准角 @param target 跟踪目标 @param bullet_speed 弹速 @return yaw、pitch */
   Eigen::Matrix<double, 2, 1> aim(const Target & target, double bullet_speed);
-  /** @brief 计算步兵策略瞄准角 @param target 跟踪目标（按值语义的局部副本，选板状态可写） @param bullet_speed 弹速 @return yaw、pitch
-   *  @note 取非 const 引用：选板用 Target::get_aim_armor_xyzad()，需要写帧内锁定状态；
-   *        调用点传的都是局部副本，不会影响跟踪器内的目标。 */
-  Eigen::Matrix<double, 2, 1> rbaim(Target & target, double bullet_speed);
+  /** @brief 计算步兵策略瞄准角 @param target 跟踪目标 @param bullet_speed 弹速 @return yaw、pitch
+   *  @note 选板用 aim_armor_xyzad()（带跨帧滞环、帧内锁定），不读也不写 Target 内部状态。 */
+  Eigen::Matrix<double, 2, 1> rbaim(const Target & target, double bullet_speed);
   /** @brief 计算英雄策略瞄准角 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return yaw、pitch */
   Eigen::Matrix<double, 2, 1> heroaim(const Target & target, double bullet_speed, double gimbal_yaw);
   /** @brief 生成动力学策略预测轨迹 @param target 跟踪目标 @param yaw0 初始偏航角 @param bullet_speed 弹速 @return 规划时域轨迹 */
   Trajectory get_trajectory(Target  target, double yaw0, double bullet_speed);
   /** @brief 生成步兵策略预测轨迹 @param target 跟踪目标 @param yaw0 初始偏航角 @param bullet_speed 弹速 @return 规划时域轨迹 */
   Trajectory rbget_trajectory(Target target, double yaw0, double bullet_speed);
+
+  /**
+   * @brief 取"本帧该瞄的装甲板"的 xyzad（跨帧滞环 + 帧内/时域内锁定）
+   *
+   * 选板状态（持有的板号）放在 Planner 里，因为 Planner 是整条下发链路上唯一跨帧存活的对象：
+   * Target 会被逐层按值拷贝（tracker → queue → plan(optional<Target>) → rbplan），
+   * 状态写在 Target 内部时下一帧就丢了，滞环永远不生效（实测"保持侧"0 帧）。
+   *
+   * 评估时机与去重：
+   *  - 第一次调用发生在 rbaim()（目标已被预测到弹丸到达时刻），因此选板用的是"命中那一刻"
+   *    的几何，而不是当前帧的几何；
+   *  - 同一目标、同一 update_count_ 内只重选一次，于是预测时域里的 100 多次采样
+   *    （rbget_trajectory 的多份拷贝）共享同一块板，参考轨迹不会在时域中途换板；
+   *  - 目标被换掉（uuid 变化）时滞环记忆清零。
+   *
+   * @param target 当前目标（只读；不改动 Target 内部状态，因此可以传 const 引用）
+   * @return xyzad 向量（x, y, z, armor_yaw, 距离）
+   */
+  Eigen::Matrix<double, 5, 1> aim_armor_xyzad(const Target & target);
 
   /** @brief 将 MPC 状态写入计划（取时域中心拍 = 开火时刻的瞄点/速度/加速度） @param plan 输出计划 @param yaw_x yaw MPC 状态 @param yaw_u yaw MPC 控制 @param pitch_x pitch MPC 状态 @param pitch_u pitch MPC 控制 @param yaw0 偏航参考零点 */
   void write_mpc_commands(

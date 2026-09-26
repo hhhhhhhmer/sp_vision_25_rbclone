@@ -416,6 +416,16 @@ add_test(
     NAME rbplan_smoke_test
     COMMAND rbplan_smoke_test ${PROJECT_SOURCE_DIR}/configs/sb_short.yaml)
 
+# 瞄板选择回归测试：滞环规则分支 + "选板状态必须跨帧存活"（旧代码里状态被按值拷贝丢光，
+# hold_engaged 恒为 0；这条测试就是防它复发）。
+add_executable(aim_armor_selection_test tests/aim_armor_selection_test.cpp)
+target_link_libraries(
+    aim_armor_selection_test
+    ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+add_test(
+    NAME aim_armor_selection_test
+    COMMAND aim_armor_selection_test ${PROJECT_SOURCE_DIR}/configs/xiaohei.yaml)
+
 add_executable(plotter_test tests/plotter_test.cpp tools/plotter.cpp)
 add_test(NAME plotter_test COMMAND plotter_test)
 

@@ -2,7 +2,7 @@
 
 ## 主要函数
 
-- `HikRobot(...)`：按序列号、曝光、增益和翻转配置创建相机。
+- `HikRobot(sn, exposure_us, gain, vid_pid, flip, mirror)`：按序列号、曝光、增益、USB VID:PID 和翻转配置创建相机（`vid_pid` 固定传 `2bdf:0001`，用于掉线复位）。
 - `ChoiceCamrea()`：从海康 SDK 枚举结果中选择匹配序列号的设备。
 - `capture_start()` / `capture_stop()`：启动或停止采集线程和 SDK 抓图。
 - `read()` / `try_read()`：读取带采集时间戳的 BGR 图像。

@@ -54,9 +54,9 @@ public:
 
   /** @brief 初始化已配置相机厂商的 SDK */
   static void initSDK();
-  /** @brief 阻塞读取一帧图像 @param img 输出图像 @param timestamp 输出经偏移修正的采集时间戳 */
+  /** @brief 阻塞读取一帧图像 @param img 输出图像 @param timestamp 输出驱动采集时刻的时间戳（不含 timestamp_offset，由上层按需补偿） */
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp);
-  /** @brief 尝试读取一帧图像 @param img 输出图像 @param timestamp 输出经偏移修正的采集时间戳 @return 成功读取时返回 true */
+  /** @brief 尝试读取一帧图像 @param img 输出图像 @param timestamp 输出驱动采集时刻的时间戳（不含 timestamp_offset，由上层按需补偿） @return 成功读取时返回 true */
   bool try_read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp);
 
   /** @brief 暂停底层相机采集 */

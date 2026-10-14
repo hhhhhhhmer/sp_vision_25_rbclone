@@ -2,6 +2,25 @@
 
 本文档依据当前代码中的 YAML 读取逻辑整理。项目没有一个适用于所有程序的单一配置结构；每个可执行程序会按其创建的模块读取同一个 YAML 文件中的不同字段。
 
+## 配置文件索引
+
+| 文件 | 用途 |
+| --- | --- |
+| `rb_auto_aim.yaml` | 步兵自瞄主配置 |
+| `rb_auto_aim_simulator.yaml` | 步兵自瞄仿真配置（配套 `src/rb_auto_aim_simulator.cpp`，当前分支未接入 CMake） |
+| `sb_long.yaml` / `sb_short.yaml` | 哨兵远/近相机配置 |
+| `hero_long.yaml` | 英雄远相机配置 |
+| `hero_short.yaml` | 英雄近相机配置（当前没有程序引用） |
+| `omn_camera_left.yaml` / `omn_camera_right.yaml` | 全向感知左/右相机入口 |
+| `xiaohei.yaml` / `mouse.yaml` | 实车整机配置 |
+| `xiaohuang.yaml` | 整机配置（当前没有程序引用） |
+| `xiaohei (1).yaml` | `xiaohei.yaml` 的另一套标定（内参、距离和偏角都不同），当前没有程序引用；文件名带空格，注意引用时要加引号 |
+| `drone.yaml` | 无人机（`trt_0526`，走 Gimbal 串口） |
+| `demo.yaml` | 离线 A/B 基准配置（UV 观测参数齐全） |
+| `camera.yaml` | 仅相机采集/取流 |
+| `calibration.yaml` | 相机 + 手眼标定入口 |
+| `test/` | 各机器人历史测试配置（`ascento`、`camera copy`、`cs`、`example`、`mvs`、`new`、`sb`、`sentry`、`standard3`、`standard4`、`uav`） |
+
 ## 字段状态说明
 
 | 状态 | 含义 |
@@ -83,7 +102,7 @@ USB 相机设备名不在 YAML 中读取，而是通过 `USBCamera(open_name, co
 | `yolo_name` | string | 必填 | OpenVINO 构建支持 `yolov5`、`ov_0526`、`yolov8`、`yolo11`；TensorRT 构建支持 `trt_0526`、`trt_0708` |
 | `device` | string | OpenVINO 必填；TRT 0708 可选，`cuda:0` | OpenVINO YOLOv5 支持 `CPU`、`GPU`、`GPU.n`、`AUTO`；YOLOv8/YOLO11 直接交给 OpenVINO；TRT 0708 作为 CUDA 设备标识 |
 | `min_confidence` | double | OpenVINO 必填；TRT 0526 默认 `0.65`；TRT 0708 默认 `0.5` | 最终候选置信度下限，通常取 `[0,1]` |
-| `detect_color` | int | TRT 可选，`-1` | TensorRT 颜色过滤：`-1` 全部、`0` 红、`1` 蓝 |
+| `detect_color` | int | TRT 可选，`-1` | TensorRT 颜色过滤：`-1` 全部、`0` 只留红、`1` 只留蓝（`0/1` 指模型原始 color_id）。注意**只有 `trt_0708` 真正生效**：`trt_0526` 的 `decode_outputs()` 接收了该参数但函数体内没有过滤逻辑，等于始终不筛色 |
 
 ### 模型路径
 
@@ -130,7 +149,8 @@ OpenVINO 实现会在读取 `use_roi` 前无条件读取 `roi` 四个子字段�
 
 `min_confidence` 同时被传统检测器作为数字分类置信度下限使用，见推理后端表。
 
-RV 数字分类器额外读取：
+RV 数字分类器额外读取一个顶层 `number_classifier` 节点（在 `hero_long.yaml`、`sb_long.yaml`、
+`sb_short.yaml` 中给出）：
 
 | 字段 | 类型 | 状态/默认值 | 作用 |
 | --- | --- | --- | --- |
@@ -167,8 +187,40 @@ RV 数字分类器额外读取：
 | `center_accel_max_jerk_mps3` | double | 可选，`30.0` | 相邻有效估计的 XY 合 jerk 上限，m/s^3 |
 | `center_accel_max_fit_rmse_m` | double | 可选，`0.08` | 二次位置拟合允许的最大二维 RMSE，m |
 | `center_accel_stale_timeout_s` | double | 可选，`0.15` | 无新后验观测后继续使用加速度的最长时间，s；同时作为异常采样间隔重置阈值 |
+| `multi_armor_fusion` | bool | 可选，`false` | 是否把同一帧内多块匹配装甲板都送入 EKF；关闭时只更新一块。前哨站和基地始终按单块更新 |
+| `multi_armor_gate` | double | 可选，`20.0` | 融合第二块及之后装甲板的马氏距离门限 |
+| `multi_armor_angle_sigma_scale` | double | 可选，`10.0` | 融合第二块及之后装甲板时，其 PnP 朝向的噪声放大系数 |
+| `meas_azimuth_sigma` | double | 可选，`-1.0` | 方位/俯仰观测噪声标准差覆盖值，rad；`<= 0` 时沿用 EKF 内部启发式 |
+| `meas_distance_sigma` | double | 可选，`-1.0` | 距离观测噪声标准差覆盖值，m；`<= 0` 时沿用 EKF 内部启发式 |
+| `meas_angle_sigma` | double | 可选，`-1.0` | 装甲板朝向观测噪声标准差覆盖值，rad；`<= 0` 时沿用 EKF 内部启发式 |
 
 中心加速度样本取自 EKF 校正后的整车旋转中心，而不是单块装甲板原始位置。基地和前哨站固定禁用该前馈；目标重建、相机切换、时间倒退或异常采样间隔会清空拟合历史。
+
+注意 `multi_armor_fusion` 在 `rb_auto_aim.yaml`、`sb_short.yaml` 里是 `true`（已启用），`demo.yaml` 里是 `false`。
+`meas_*_sigma` 三个键只有 `rb_auto_aim.yaml` 显式给出（`0.01 / 0.15 / 0.10`），其余配置走默认的启发式。
+
+### UV（灯条端点）观测
+
+启用后 EKF 改用灯条端点的像素观测（UVL）而不是世界系 `[yaw,pitch,distance,armor_yaw]`。
+这批键由 `Tracker::load_uv_config()` 读取，全部可选；`rb_auto_aim.yaml` 与 `sb_short.yaml` 均已
+`uv_observation: true`。
+
+| 字段 | 类型 | 状态/默认值 | 作用 |
+| --- | --- | --- | --- |
+| `uv_observation` | bool | 可选，`false` | 是否启用 UV 观测；关闭时沿用世界系 ypd 观测 |
+| `uv_sigma_px` | double | 可选，`0.3` | 灯条端点检测噪声标准差，px |
+| `uv_sigma_len_ratio` | double | 可选，`0.01` | 与灯条像素长度成比例的附加端点噪声（尺度不变项） |
+| `uv_sigma_attitude_deg` | double | 可选，`0.5` | 云台/外参姿态误差等效标准差，degree；换算成像素后加到灯条中心噪声 |
+| `uv_attitude_common_ratio` | double | 可选，`0.0` | 姿态误差中“整帧共模”部分的比例，`[0,1]`；`0` 等价把姿态误差当独立噪声，`1` 为完全共模 |
+| `uv_sigma_angle` | double | 可选，`0.03` | 灯条角度噪声下限，rad |
+| `uv_associate_gate_px` | double | 可选，`40.0` | 灯条中心像素距离的关联门限，px |
+| `uv_facing_cos_min` | double | 可选，`0.15` | 可见性判据：装甲板法线与视线夹角的余弦下限 |
+| `uv_radius_prior_sigma` | double | 可选，`0.03` | 单装甲退化保护：半径初始协方差标准差，m；`<= 0` 表示沿用原值 |
+| `uv_process_noise_z_scale` | double | 可选，`1.0` | 深度方向过程噪声缩放系数；只在 UV 模式下生效 |
+
+UV 模式下的行为差异：Tracker 逐帧不再调用 `Solver::try_solve()`（PnP 只在建立新目标时执行一次），
+相机几何每帧从当前 solver 重新获取，几何无效时回退到 ypd 观测并只告警一次。
+参数含义的更多说明见 `tasks/auto_aim/tracking/README.md`，可视化见 `tools/uv_overlay.hpp`。
 
 ## Aimer 与 Shooter
 
@@ -226,7 +278,7 @@ RV 数字分类器额外读取：
 | `fov_v` | double | Decider 必填 | 原垂直视场角，degree；当前读取后未参与计算 |
 | `new_fov_h` | double | Decider 必填 | 用于归一化像素坐标换算 yaw 的有效水平视场角，degree |
 | `new_fov_v` | double | Decider 必填 | 用于归一化像素坐标换算 pitch 的有效垂直视场角，degree |
-| `mode` | int | Decider 必填 | 目标优先级模式，当前有效值为 `1`、`2`、`3` |
+| `mode` | double（取值 1/2/3） | Decider 必填 | 目标优先级模式，当前有效值为 `1`、`2`、`3` |
 
 全向感知还会读取前述 `enemy_color`；值为 `auto` 时从云台数据动态选择敌方颜色。
 

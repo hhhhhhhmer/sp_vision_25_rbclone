@@ -4,6 +4,27 @@
 优化、大小符运动估计、弹道拦截和自动火控。相机取帧、IMU 姿态插值、云台通信及机器人
 标定仍由当前项目原有模块负责。
 
+## 目录结构
+
+| 路径 | 内容 |
+| --- | --- |
+| `rune_system.hpp/.cpp` | 对外入口 `auto_buff::RuneSystem`：`process()` / `reset()` / `debug_snapshot()`；以及 `BuffMode`、`EnemyColor`、`RuneFailureReason`、`RuneCommand`、`RuneDebugSnapshot` |
+| `detector/` | `RuneDetector` 五点推理（OpenVINO / TensorRT 两套后端）及 TRT 预处理 kernel |
+| `adapter/pose_adapter.*` | 项目 IMU 姿态 → RP 核心 `CameraPose` 适配 |
+| `rp_core/include`、`rp_core/src` | 上游 RP 算法：`PowerRuneProcessor`、`RuneDecisionModule`、`PowerRunePlane`（Chamfer 位姿）、`RuneObservationRefiner`、`PhaseMotionEstimator` 与 `big_rune_motion_estimate/`、`PowerRuneBallisticModel`；配置中心 `PowerRuneConfigStore`（全局 `J_POWER_RUNE`） |
+| `rp_core/config/` | `json.hpp`（YAML 包装）、`PnPVariable.hpp` |
+| `config/power_rune_defaults.yaml` | RP 算法默认参数 |
+| `models/` | `model-0624.onnx`（+ 本机生成的 `*-fp16.engine`） |
+| `rune_debug_draw.hpp` | 基于 `RuneDebugSnapshot` 的 OpenCV 调试绘制 |
+| `scripts/build_trt_engine.sh` | TensorRT engine 构建（构建前校验模型 SHA-256） |
+
+`auto_buff` 编译为静态库，只在 `SP_VISION_BACKEND` 为 `OPENVINO`/`TENSORRT` 时加入构建
+（`NONE` 时整个模块不编译）。可直接参考的调用与测试：
+`tests/sp_example/rune_system_example.hpp`、`tests/auto_buff_test.cpp`、
+`tests/rune_system_safety_test.cpp`、`tests/rune_config_test.cpp`、
+`tests/rune_motion_fit_test.cpp`、`tests/rune_pose_adapter_test.cpp`、
+`tests/rune_detector_decode_test.cpp`。
+
 ## 公共接口
 
 调用方只需包含 `tasks/auto_buff/rune_system.hpp`，使用机器人 YAML 配置构造一个
@@ -14,8 +35,9 @@
 调用 `gimbal.send()` 时对应字段保持为零。
 
 `debug_snapshot()` 提供五点检测结果、语义轮廓、模型重投影、预测命中点、运动参数、阶段耗时
-和失败关闭原因。算法核心不会创建或管理 GUI 窗口，调试程序使用当前项目的 OpenCV 和
-PlotJuggler 工具显示这些数据。
+和失败关闭原因。算法核心不会创建或管理 GUI 窗口，调试渲染由调用方完成：参考实现见
+`rune_debug_draw.hpp`（OpenCV 绘制）和 `tests/auto_buff_test.cpp`；`rp_core` 里
+`foxglove::schemas` 下的结构体只是本地兼容桩，不产生实际可视化输出。
 
 ## 配置规则
 
@@ -56,7 +78,17 @@ TENSORRT_ROOT=/path/to/TensorRT \
 tasks/auto_buff/scripts/build_trt_engine.sh
 ```
 
-生成的 `*.engine` 已由目录内的 `.gitignore` 排除，不应提交到仓库。
+脚本默认把 engine 写到 `models/model-0624-fp16.engine`，也可以传入输出路径，或用 `TRTEXEC`
+指定 `trtexec`：
+
+```bash
+tasks/auto_buff/scripts/build_trt_engine.sh /path/to/model-0624-fp16.engine
+TRTEXEC=/path/to/trtexec tasks/auto_buff/scripts/build_trt_engine.sh
+```
+
+构建前脚本会校验 `model-0624.onnx` 的 SHA-256，不匹配时直接退出。
+
+生成的 `*.engine` 已由 `models/.gitignore`（`*.engine`）排除，不应提交到仓库。
 
 ## 构建示例
 
@@ -80,9 +112,12 @@ cmake --build build-tensorrt -j2
 ## 许可证与来源
 
 RP 核心代码基于 RP-26Rune 提交
-`7181abb35ffa282356324266427f9cc295f1218b` 适配。五点模型保留了上游发布的 SHA-256 校验。
-两者均采用 MIT 许可证，详细信息见：
+`7181abb35ffa282356324266427f9cc295f1218b` 适配。五点模型的 SHA-256 在
+`scripts/build_trt_engine.sh` 中构建 TensorRT engine 前校验，OpenVINO 运行时不做校验。
 
-- `RP26_LICENSE`
+上游 RP-26Rune 为 MIT 许可证，但本仓库目前**没有附带 RP 核心的许可证文本**
+（`rp_core/` 内也没有许可证头），重新分发前需要补一份上游 MIT 许可证全文。
+五点模型的来源声明与 MIT 许可证文本见：
+
 - `THIRD_PARTY_NOTICE.md`
 - `models/LICENSE`

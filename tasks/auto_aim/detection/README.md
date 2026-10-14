@@ -19,14 +19,16 @@
 - `Detector::detect(bgr_img)`：灰度化、二值化、提取灯条、两两配对、数字分类并去除重复装甲板。
 - `Detector::detect(armor, bgr_img)`：在已有候选框内重新提取灯条。
 - `Classifier::classify(armor)`：将装甲板数字区域缩放到 `32x32`，经 ONNX 网络和 softmax 得到编号及置信度。
-- `Classifier::ovclassify(armor)`：使用 OpenVINO 执行同类数字分类。
+- `Classifier::ovclassify(armor)`：OpenVINO 版同类数字分类，目前没有调用点（保留接口，实际调用的是 `classify()`）。
 - `resolve_roi(configured, image_size)`：把支持 `-1` 宽高的 ROI 配置解析为合法图像区域，并检查越界。
 
 ### 其他识别器
 
-- `rv_detector.*`：基于灯条几何的另一套装甲板检测实现。
+- `rv_detector.*`、`rv_number.*`：基于灯条几何的另一套装甲板检测与数字分类实现，位于 `rv_aim` 命名空间（与 `auto_aim::Detector` 是两个不同的类）；`NumberClassifier` 由 YAML 的 `number_classifier` 节点构造，其中 `ignore_classes` 当前未被读取。
 - `NumberClassifier::extractNumbers()`：从装甲板区域提取数字图案。
 - `NumberClassifier::classify()`：使用 OpenCV DNN 对候选装甲板批量分类。
+
+`yolo_name` 的可选值随后端不同：OpenVINO 支持 `yolov5`、`ov_0526`、`yolov8`、`yolo11`；TensorRT 支持 `trt_0526`、`trt_0708`。未知取值会抛异常。
 
 ## 原理
 

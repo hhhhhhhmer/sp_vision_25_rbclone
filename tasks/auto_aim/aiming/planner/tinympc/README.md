@@ -7,8 +7,9 @@
 ## 主要类型
 
 - `TinySolver`：聚合缓存、设置、工作区和最终解。
-- `TinyProblem`：保存动力学矩阵、状态/输入序列、参考轨迹、约束和 ADMM 中间变量。
-- `TinySettings`：收敛阈值、最大迭代次数和约束开关。
+- `TinyWorkspace`：保存动力学矩阵、状态/输入序列、参考轨迹、约束和 ADMM 中间变量。
+- `TinyCache`：保存 rho、`Kinf`/`Pinf`/`Quu_inv` 等 Riccati 预计算，以及自适应 rho 的敏感度矩阵。
+- `TinySettings`：收敛阈值、最大迭代次数和约束开关，含自适应 rho 相关字段（`adaptive_rho*`）。
 - `TinySolution`：保存求解状态、迭代次数、状态轨迹 `x` 和控制轨迹 `u`。
 
 ## 主要函数

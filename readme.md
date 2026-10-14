@@ -11,81 +11,105 @@ sp_vision_25rbclone
 │   ├── calibrate_robotworld_handeye.cpp // 手眼标定程序（同时计算标定板位置）
 │   └── capture.cpp                      // 相机标定数据采集程序
 ├── CMakeLists.txt // CMake配置文件
-├── configs        // 每台机器人的YAML配置文件
-│   └── ...
+├── configs        // 每台机器人的YAML配置文件，见 configs/README.md
+│   └── ...
+├── evaluation     // 离线评估工具与原始数据（当前只在本地保留，被 .gitignore 排除）
+│   └── armor_model_eval // 装甲板模型能力评估
 ├── io             // 硬件抽象层，见 io/README.md
-│   ├── camera     // 相机统一接口、图像处理和厂商驱动
-│   ├── gimbal     // 云台、C 板和控制命令通信
-│   ├── serial     // 串口库
-│   └── README.md
+│   ├── camera     // 相机统一接口、图像处理和厂商驱动
+│   ├── gimbal     // 云台、C 板和控制命令通信
+│   ├── serial     // 串口库
+│   └── README.md
+├── scripts        // setup_env.sh：一键装依赖、检查环境并编译
+├── sp_example     // 早期程序的归档（1.cpp、sentry/uav/mt_* 等），不参与编译
+├── sp_ws          // ROS2 消息包（sp_msgs：AutoaimTargetMsg、EnemyStatusMsg），按需 colcon build
 ├── src            // 应用层，调试/上场代码
-|   ├── 1.cpp
-|   ├── auto_aim_debug_mpc.cpp          //原济瞄aim mpc debug，已弃用
-|   ├── auto_buff_debug.cpp             //原济瞄buff debug
-|   ├── auto_buff_debug_mpc.cpp         //原济瞄buff mpc debug
-|   ├── hero.cpp                        //26赛季英雄专用
-|   ├── mt_auto_aim_debug.cpp           //没用
-|   ├── mt_standard.cpp                 //没用
-|   ├── rb_auto_aim_debug.cpp           //26赛季步兵、哨兵通用aim mpc debug
-|   ├── rb_binocular_aim_debug.cpp      //26赛季双目自瞄debug
-|   ├── sentry_binocular_aim_mpc.cpp    //26赛季新烧饼双目视觉、全向感知集大乘
-|   ├── sentry_bp.cpp                   //没用
-|   ├── sentry.cpp                      //没用
-|   ├── sentry_debug.cpp                //没用
-|   ├── sentry_multithread.cpp          //没用
-|   ├── standard.cpp                    //没用
-|   ├── standard_mpc.cpp                //auto_buff_debug_mpc没imshow版本
-|   ├── uav.cpp                         //没用
-|   └── uav_debug.cpp                   //没用
-|
+|   ├── hero.cpp                        // 26赛季英雄专用
+|   ├── omni_perception.cpp             // 全向感知单独运行程序
+|   ├── rb_auto_aim_debug.cpp           // 26赛季步兵、哨兵通用aim debug
+|   ├── rb_auto_aim_debug_async.cpp     // aim debug（异步版）
+|   ├── rb_auto_aim_debug_fft.cpp       // 带FFT（前哨站等周期运动）的aim debug
+|   ├── rb_auto_aim_simulator.cpp       // ROS2仿真输入的自瞄程序（尚未接入CMake，见文末说明）
+|   ├── rb_auto_standard.cpp            // 步兵上场程序
+|   ├── rb_auto_standard_async.cpp      // 步兵上场程序（异步版）
+|   ├── rb_auto_standard_debug.cpp      // 步兵上场程序debug
+|   ├── rb_auto_standard_debug_async.cpp// 步兵上场程序debug（异步版）
+|   ├── rb_binocular_aim_debug.cpp      // 26赛季双目自瞄debug
+|   ├── rb_binocular_aim_debug_async.cpp// 26赛季双目自瞄debug（异步版）
+|   ├── rb_rv_aim_debug.cpp             // 换RV识别模型的aim debug
+|   ├── rbnx_auto_aim_debug.cpp         // NX上的aim debug
+|   ├── rbnx_auto_aim_debug_async.cpp   // NX上的aim debug（异步版）
+|   ├── sb_omn_aim_mpc.cpp              // 26赛季步兵/哨兵通用，自瞄+全向感知
+|   ├── sentry_binocular_aim_mpc.cpp    // 26赛季双目视觉版哨兵
+|   └── sentry_omn_aim_mpc.cpp          // 26赛季全向感知版哨兵
 ├── tasks          // 功能层，见3.4软件架构
-│   ├── auto_aim       // 自瞄相关算法实现，见 tasks/auto_aim/README.md
-│   │   ├── model      // 公共数据结构
-│   │   ├── detection  // 图像识别和推理后端
-│   │   ├── geometry   // 装甲板位姿解算
-│   │   ├── tracking   // 目标跟踪和滤波
-│   │   └── aiming     // 瞄准、规划和火控
-│   ├── auto_buff      // 打符相关算法实现
-│   │   └── ...
-│   └── omniperception // 全向感知相关算法实现
-│   │   └── ...
+│   ├── auto_aim       // 自瞄相关算法实现，见 tasks/auto_aim/README.md
+│   │   ├── model      // 公共数据结构
+│   │   ├── detection  // 图像识别和推理后端
+│   │   ├── geometry   // 装甲板位姿解算
+│   │   ├── tracking   // 目标跟踪和滤波
+│   │   └── aiming     // 瞄准、规划和火控
+│   ├── auto_buff      // 打符相关算法实现，见 tasks/auto_buff/README.md
+│   │   └── ...
+│   └── omniperception // 全向感知相关算法实现，见 tasks/omniperception/README.md
+│       └── ...
 ├── tests    //用于测试的代码
-│   ├── auto_aim_test.cpp         // 自瞄录制视频测试程序
-│   ├── auto_buff_test.cpp        // 打符录制视频测试程序
-│   ├── camera_detect_test.cpp    // 识别器测试程序（工业相机）
-│   ├── camera_test.cpp           // 相机测试程序
-│   ├── camera_thread_test.cpp    // 相机线程测试程序
-│   ├── cboard_test.cpp           // C板测试程序
-│   ├── detector_video_test.cpp   // 识别器测试程序（视频）
-│   ├── dm_test.cpp               // 达妙IMU测试程序
-│   ├── fire_test.cpp             // 开火测试程序
-│   ├── gimbal_response_test.cpp  // 云台响应测试程序
-│   ├── gimbal_test.cpp           // 云台通信测试程序
-│   ├── handeye_test.cpp          // 手眼标定测试程序
-│   ├── minimum_vision_system.cpp // 最小视觉系统测试程序
-│   ├── multi_usbcamera_test.cpp  // 多USB摄像头测试程序
-│   ├── planner_test_offline.cpp  // 规划器测试程序（离线）
-│   ├── planner_test.cpp          // 规划器测试程序（实车）
-│   ├── publish_test.cpp          // ROS发送测试程序
-│   ├── subscribe_test.cpp        // ROS接收测试程序
-│   ├── topic_loop_test.cpp       // ROS话题循环测试程序
-│   ├── usbcamera_detect_test.cpp // 识别器测试程序（USB相机）
-│   ├── usbcamera_test.cpp        // USB相机测试程序
-│   └── ...
-└── tools          // 工具层，见3.4软件架构
+│   ├── auto_aim_test.cpp         // 自瞄录制视频测试程序
+│   ├── auto_aim_test_async.cpp   // 自瞄录制视频测试程序（异步版）
+│   ├── auto_buff_test.cpp        // 打符录制视频测试程序
+│   ├── camera_detect_test.cpp    // 识别器测试程序（工业相机）
+│   ├── camera_image_processing_test.cpp // 相机图像处理（Gamma/降噪）测试
+│   ├── camera_test.cpp           // 相机测试程序
+│   ├── cameras_test.cpp          // 多相机测试程序
+│   ├── 4cmaera_test.cpp          // 四相机测试程序
+│   ├── binocular_camera_test.cpp // 双目相机测试程序
+│   ├── gimbal_test.cpp           // 云台通信测试程序
+│   ├── omniperception_test.cpp   // 全向感知测试程序
+│   ├── planner_offline_replay.cpp// 规划器离线回放
+│   ├── rbplan_smoke_test.cpp     // 规划器冒烟测试
+│   ├── aim_armor_selection_test.cpp // 瞄准选板逻辑测试
+│   ├── rune_*_test.cpp           // 打符测试（配置/运动拟合/位姿适配/解码/安全）
+│   ├── uv_*_test.cpp             // UV观测测试（滤波、雅可比、回归、叠加渲染）
+│   ├── tracker_offline_bench.cpp // 跟踪器离线跑分
+│   ├── sp_example              // 往年示例程序
+│   │   ├── camera_thread_test.cpp    // 相机线程测试程序
+│   │   ├── cboard_test.cpp           // C板测试程序
+│   │   ├── detector_video_test.cpp   // 识别器测试程序（视频）
+│   │   ├── dm_test.cpp               // 达妙IMU测试程序
+│   │   ├── fire_test.cpp             // 开火测试程序
+│   │   ├── gimbal_response_test.cpp  // 云台响应测试程序
+│   │   ├── handeye_test.cpp          // 手眼标定测试程序
+│   │   ├── minimum_vision_system.cpp // 最小视觉系统测试程序
+│   │   ├── multi_usbcamera_test.cpp  // 多USB摄像头测试程序
+│   │   ├── planner_test.cpp          // 规划器测试程序（实车）
+│   │   ├── planner_test_offline.cpp  // 规划器测试程序（离线）
+│   │   ├── publish_test.cpp          // ROS发送测试程序
+│   │   ├── subscribe_test.cpp        // ROS接收测试程序
+│   │   ├── topic_loop_test.cpp       // ROS话题循环测试程序
+│   │   ├── usbcamera_detect_test.cpp // 识别器测试程序（USB相机）
+│   │   └── usbcamera_test.cpp        // USB相机测试程序
+│   └── ...
+└── tools          // 工具层，见 tools/README.md
     ├── crc.hpp                    // CRC校验
     ├── exiter.hpp                 // 退出检测
     ├── extended_kalman_filter.hpp // 扩展卡尔曼滤波器
+    ├── fft.hpp                    // FFT周期运动分析
+    ├── fps_solve.hpp              // 帧率统计
+    ├── gimbal_calib.cpp           // 云台标定程序（独立可执行文件）
     ├── img_tools.hpp              // 图像处理工具
     ├── logger.hpp                 // 日志记录器
     ├── math_tools.hpp             // 数学工具
+    ├── periodic_timer.hpp         // 绝对时刻周期调度器
+    ├── pid.hpp                    // PID控制器
     ├── plotter.hpp                // 曲线图绘制工具
+    ├── plotter_replay.cpp         // PlotJuggler记录回放程序
     ├── recorder.hpp               // 视频录制器
+    ├── systemd_watchdog.hpp       // systemd看门狗心跳（见 自动启动.md）
+    ├── thread_pool.hpp            // 线程池
     ├── thread_safe_queue.hpp      // 线程安全队列
     ├── trajectory.hpp             // 弹道解算
-    ├── yaml.hpp                   // YAML配置文件解析器
-    └── ...
-
+    ├── uv_overlay.hpp             // UV观测可视化叠加
+    └── yaml.hpp                   // YAML配置文件解析器
 ```
 
 ## PlotJuggler 数据录制和回放
@@ -176,12 +200,14 @@ tools::Plotter realtime_only_plotter(false);
 
 - 其余：
 ```bash
+# 注意：jetson 系列不能装 libopencv-dev，需使用系统自带 opencv 或手动编译，
+# 否则会覆盖原有版本、cmake 也找不到 libopencv-dev 安装
 sudo apt install -y \
     git \
     g++ \
     cmake \
     can-utils \
-    libopencv-dev \  # jetson系列不能运行此命令，需使用自带opencv或者手动编译，否则会覆盖原有版本,cmake找不到libopencv-dev安装
+    libopencv-dev \
     libfmt-dev \
     libeigen3-dev \
     libspdlog-dev \
@@ -192,6 +218,22 @@ sudo apt install -y \
     openssh-server \
     screen
 ```
+
+#### 一键环境配置脚本
+
+上面这些 apt / OpenVINO / 相机 SDK 检查和 `build` 目录配置可以交给脚本完成：
+
+```bash
+scripts/setup_env.sh                 # 装依赖 + 检查依赖 + 配置并编译 ./build
+scripts/setup_env.sh --check-only    # 只检查依赖，不改动系统
+```
+
+常用选项：`--no-apt`、`--no-build`、`--build-dir DIR`、`--jobs N`、`--clean-build`、
+`--with-openvino`（安装 OpenVINO 2024.6）、`--with-ros2-msgs`、`--configure-camera-sdk`
+（把 `io/*/lib/<amd64|arm64>` 注册进 ldconfig）、`--force-opencv-apt`、`--no-persist`、
+`--skip-checks`。脚本按 CPU 架构检查依赖（aarch64 → CUDA/TensorRT，x86_64 → OpenVINO），
+与 `-DSP_VISION_BACKEND` 的自动选择规则一致。完整选项见 `scripts/setup_env.sh --help`。
+
 #### jetson 系列小电脑 （arm架构）
 to do list
 
@@ -199,17 +241,22 @@ to do list
 #### 运行相机
 更改配置文件
 ```yaml
-camera_name: "daheng"      # 相机品牌 daheng 或者hikrobot
-camera_sn: "KE0210030295"  # 相机序列号，相机唯一标识（需要与所使用相机一致）
-exposure_us: 4000          # 相机曝光
-gain: 0.5                  # 相机增益，这里限定0~1之间
-gamma: 0.5                 # 相机gamma值，0~1之间，1代表不开伽马，越低gamma越强
-img_gamma: 0.5
-vid_pid: "2ba2:4d55"       # 相机接口所对应的vid和pid，一般同一个相机品牌vid_pid都相同，大恒是2ba2:4d55， 海康是2bdf:0001
-flip: false                # 相机画面是否倒置（翻转）
-mirror: false              # 相机画面是否镜像
+camera_name: "hikrobot"    # 相机品牌 daheng / hikrobot / mindvision
+camera_sn: "DA7188471"     # 相机序列号，相机唯一标识（需要与所使用相机一致；mindvision 不读该字段）
+exposure_us: 2500          # 相机曝光
+gain: 0.8                  # 相机增益，这里限定0~1之间（mindvision 不读该字段）
+gamma: 0.5                 # 相机SDK gamma值，0~1之间，1代表不开伽马，越低gamma越强（海康分支不读该字段）
+img_gamma: 0.5             # 软件亮度gamma，1.0 表示完全跳过软件gamma和配套降噪
+vid_pid: "2ba2:4d55"       # 相机接口所对应的vid和pid，仅mindvision读取；大恒固定2ba2:4d55，海康固定2bdf:0001
+flip: false                # 相机画面是否倒置（翻转），mindvision 不读该字段
+mirror: false              # 相机画面是否镜像，mindvision 不读该字段
+timestamp_offset_us: 1000  # 采集时间戳补偿量，单位us，由上层按需使用
 ```
-一栏后，编译运行./build/camera_test
+
+`img_gamma` 不为 1 时还会在 YCrCb 空间做降噪，三个可选参数（默认值见 `configs/README.md`）：
+`img_gamma_shadow_offset`、`img_gamma_luma_denoise_sigma`、`img_gamma_chroma_denoise_sigma`。
+
+改完配置文件后，编译运行 `./build/camera_test` 观察画面。
 
 ## 部署步骤
 ### 1. 编译：
@@ -248,22 +295,20 @@ com_port:                 # 串口板文件路径，按顺序尝试
 gimbal_y1: 1
 gimbal_p2: -3
 gimbal_r3: -2
-# 济瞄的惯性系  z轴往上, x轴反方向是枪管指向
-#        z
-#        |
-#        |
+# 济瞄的惯性系  z轴往上, x轴是枪管指向
+#     x  z
+#      \ |
+#       \|
 # y_ _ _ 0   z:yaw   x:roll   y:pitch
-          \
-           \
-            \x
 ```
 - 若通信成功，终端会打印出电控四元数转欧拉角的信息，检查通信流畅度，保证不能存在卡顿，注意电控陀螺仪坐标要与济瞄坐标系对齐
 - 若通信不成功，检查串口助手是否接收到信息？检查帧头帧尾是否对齐？crc校验是否通过？如果确认没问题，可以换回老代码通信查看接收输出，如果也没数据，大概率是板子有问题或者电控有问题
 
 ### 4. 相机标定&手眼标定
-calibration文件夹下有三个文件需要用到：\
+calibration文件夹下有多个程序，最常用的是：\
 calibrate_camera   相机标定程序  \
 calibrate_handeye  固定标定板位姿的手眼标定程序  \
+calibrate_robotworld_handeye  手眼标定程序（同时计算标定板位置）  \
 capture            四元数采集&拍照程序
 
 
@@ -282,9 +327,9 @@ capture            四元数采集&拍照程序
 
 ### 6. 时间戳对齐
 由于相机快门时钟和陀螺仪时钟分别在视觉端和电控端，是两个不同的系统时钟，且相机快门时间会占据一定ms时长，所以需要对齐时间戳 \
-找到代码里的
+找到代码里的（`src/rb_auto_aim_debug.cpp` 等 debug 程序；`rb_auto_standard.cpp` 等上场程序直接取 `gimbal.q(t)`，补偿量在相机配置的 `timestamp_offset_us` 里）
 ```cpp
-auto q = gimbal.q(timestamp - 3ms);
+auto q = gimbal.q(t - 3ms);
 ```
 晃动云台观察静靶，观察速度和角速度直线是否跳变？如果出现跳变就更改3ms的数值，使其增大或者减小，直至晃动云台静靶的速度和角速度直线很小甚至没有，时间充裕建议单位换成us进行调整
 
@@ -299,12 +344,30 @@ pitch_offset: -1  # degree 2   pitch偏移量
 
 ### 8. 调planner和延迟
 ```yaml
-high_speed_delay_time: 0.09          # s  高速小陀螺发弹延迟
-low_speed_delay_time: 0.09           # s  低速小陀螺&平移发弹延迟
+#####-----aimer参数-----#####
+# 远距离(target_h 超阈值)时的额外 pitch 补偿(度)；Planner 必须读到该键，缺失会直接退出
+far_pitch_offset: 0
+# 远距离且目标较高时的额外 pitch 补偿(度)；同上，必须存在
+far_high_pitch_offset: 0
+yaw_offset: 0                        # degree yaw偏移量
+pitch_offset: 0                      # degree pitch偏移量
+comming_angle: 60                    # degree
+leaving_angle: 20                    # degree
+decision_speed: 8                    # rad/s 区分高速/低速小陀螺的转速阈值
+high_speed_delay_time: 0.030         # s  高速小陀螺发弹延迟
+low_speed_delay_time: 0.015          # s  低速小陀螺&平移发弹延迟
+gimbal_delay: 0.002                  # s  云台延迟补偿
+shoot_offset: 2                      # 开火点在MPC预测时域中的下标，越界会直接抛异常退出
 
-... 
+#####-----shooter参数-----#####
+first_tolerance: 3                   # 近距离射击容差 degree
+second_tolerance: 2                  # 远距离射击容差 degree
+judge_distance: 2                    # 距离判断阈值 m
+auto_fire: true                      # 是否由自瞄控制射击
 
 #####-----planner-----#####
+target_dist_error: -0.23             # 弹道距离补偿 m
+target_h_error: 0.28                 # 弹道高度补偿 m
 fire_thresh: 0.003                   # 原济瞄火控跟随火控阈值，更改影响火控频率和精度，已弃用
 small_armor_tolerance: 0.12          # cm 小装甲板开火区间，一般是一个小装甲板的宽度
 big_armor_tolerance: 0.22            # cm 大装甲板开火区间，一般是一个大装甲板的宽度
@@ -316,11 +379,12 @@ max_yaw_acc: 50                      # mpc最大yaw角速度约束，单位rad/s
 Q_yaw: [9e6, 0]                      # 不用管
 R_yaw: [1]                           # 不用管
 
-max_pitch_acc: 100                   # mpc最大yaw角速度约束，单位rad/s,参考yaw
+max_pitch_acc: 100                   # mpc最大pitch角速度约束，单位rad/s,参考yaw
 Q_pitch: [9e6,0]                     # 不用管
 R_pitch: [1]                         # 不用管
 ```
-- high_speed_delay_time和low_speed_delay_time在planner也有用到
+- high_speed_delay_time、low_speed_delay_time、decision_speed 在 aimer 和 planner 中都会读取
+- far_pitch_offset、far_high_pitch_offset、target_dist_error、target_h_error、shoot_offset 缺失时 Planner 会直接退出，换配置文件时注意别漏
 
 #### 调云台跟随延迟 gimbal_control_delay
 云台跟随延迟指的是视觉发送信息到电控到电控将电机转到目标角度所需时间，如果没有动力学的话需要调此值，如果上动力学的话需要将此值设成0。

@@ -7,7 +7,7 @@
 ```text
 Camera::read()
     -> YOLO::detect() / Detector::detect()
-    -> Solver::try_solve()
+    -> Solver::try_solve()      // 仅传统 ypd 观测；UV 观测（uv_observation: true）下只在建立新目标时解一次
     -> Tracker::track()
     -> Planner::plan() / Aimer::aim()
     -> Gimbal::send()
@@ -19,10 +19,10 @@ Camera::read()
 
 | 目录 | 主要类或函数 | 作用 |
 | --- | --- | --- |
-| `model/` | `Armor`、`IArmorDetector` | 保存单帧观测数据和公共接口 |
-| `detection/` | `YOLO::detect()`、`Detector::detect()` | 从图像中找出装甲板及其类别、关键点 |
-| `geometry/` | `Solver::try_solve()` | 把二维关键点转换为三维位置和姿态 |
-| `tracking/` | `Tracker::track()`、`Target::predict()`、`RVfromFYT` | 跨帧关联观测并估计目标运动状态 |
+| `model/` | `Armor`、`IArmorDetector`、`IArmorPoseSolver`、`CameraGeometry` | 保存单帧观测数据、公共接口，以及 UV 观测所需的相机几何 |
+| `detection/` | `YOLO::detect()`、`Detector::detect()`、`Classifier`、`rv_aim::Detector`、`MultiThreadDetector` | 从图像中找出装甲板及其类别、关键点 |
+| `geometry/` | `Solver::try_solve()`、`Solver::camera_geometry()` | 把二维关键点转换为三维位置和姿态 |
+| `tracking/` | `Tracker::track()`、`Target::predict()`、`RVfromFYT`、`UvModel`（UV 观测）、多装甲板融合 | 跨帧关联观测并估计目标运动状态 |
 | `aiming/` | `Planner::plan()`、`Aimer::aim()`、`Shooter::shoot()` | 预测击打位置并生成云台和开火命令 |
 
 ## 基本原理

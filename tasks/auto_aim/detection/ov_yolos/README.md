@@ -8,7 +8,9 @@
 - `parse(scale, output, image, frame_count)`：解释网络张量、恢复原图坐标、执行 NMS 并构造 `Armor`。
 - `postprocess()`：公开后处理入口，供外部异步推理代码调用。
 - `check_name()`、`check_type()`：过滤不合法类别和尺寸组合。
-- `draw_detections()`、`save()`：只在调试模式下绘制或保存识别结果。
+- `draw_detections()`：调试模式下绘制识别结果（调用点由 `debug_` 把守）。
+- `save()`：把可疑样本落盘，但三个后端里的调用点目前都被注释掉，实际不会保存。
+- `yolo_name: ov_0526` 在 OpenVINO 下同样映射到 `YOLOV5` 实现。
 
 ### `OpenVINOAsyncPipeline`
 

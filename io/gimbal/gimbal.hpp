@@ -50,7 +50,7 @@ struct __attribute__((packed)) VisionToGimbal
   float pitch = 0;
   float pitch_vel = 0;
   float pitch_acc = 0;
-  uint16_t crc16 = 0;  // 注意：目前发送路径未计算 CRC，此处置 0 保证帧内容确定
+  uint16_t crc16 = 0;  // 发送前由 Gimbal::send() 用 tools::get_crc16() 填入（覆盖前 26 字节，小端存放）
   uint8_t end = {0x11};
 };
 

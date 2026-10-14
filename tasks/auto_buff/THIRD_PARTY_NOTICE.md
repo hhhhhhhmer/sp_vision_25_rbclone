@@ -11,3 +11,13 @@ upstream `infer/fivepoints_infer.cpp`.
 - License text: `models/LICENSE`
 
 No model or deployment library from the non-public reference project is used.
+
+## RP-26Rune notice
+
+The power-rune algorithm under `rp_core/` is adapted from RP-26Rune commit
+`7181abb35ffa282356324266427f9cc295f1218b`. The upstream project is MIT-licensed.
+
+- Upstream license: MIT
+- License text in this repository: **missing** — there is no `RP26_LICENSE` file and
+  `rp_core/` carries no license headers, so an MIT license copy must be added before
+  redistribution.

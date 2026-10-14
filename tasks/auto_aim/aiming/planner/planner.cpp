@@ -583,9 +583,11 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   // 只需回退云台提前量 gimbal_delay（τ+T）即落在 θ(t + speed_delay + fly)。
   // 注意：不能把 speed_delay 也回退（上一版错误）——否则门限参考晚于命中点，
   // 高速目标即使完全命中也被门限拒发。
-  Target target_at_bullet = target;
-  target_at_bullet.predict(-gimbal_delay_);
-  plan.fire = is_fire(gimbal_yaw / 57.3 - yaw_offset_, target_at_bullet, false);
+  // Target target_at_bullet = target;
+  // target_at_bullet.predict(-gimbal_delay_);
+  // plan.fire = is_fire(gimbal_yaw / 57.3 - yaw_offset_, target_at_bullet, false);
+  // plan.fire = is_fire(gimbal_yaw / 57.3 - yaw_offset_, target, false);
+  plan.fire = is_fire(plan.yaw, target, false);
   // tools::logger()->warn("fire:{}", plan.fire);
   plan.target_yaw = (aim_target_yaw + yaw_offset_ )* 57.3;
 

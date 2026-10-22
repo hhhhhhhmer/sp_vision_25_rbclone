@@ -40,6 +40,17 @@ inline void draw_rune_debug(cv::Mat & image, const RuneDebugSnapshot & debug)
   cv::putText(
     image, status, cv::Point(20, 32), cv::FONT_HERSHEY_SIMPLEX, 0.55,
     cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+
+  if (debug.uv_pose_active) {
+    const std::string uv_status = debug.uv_reprojection_error
+      ? cv::format(
+          "UV pose rmse %.2f px nis %.1f reject %d", *debug.uv_reprojection_error,
+          debug.uv_nis, debug.uv_rejected_blades)
+      : cv::format("UV pose nis %.1f reject %d", debug.uv_nis, debug.uv_rejected_blades);
+    cv::putText(
+      image, uv_status, cv::Point(20, 56), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+      cv::Scalar(0, 255, 0), 1, cv::LINE_AA);
+  }
 }
 }  // namespace auto_buff
 

@@ -238,6 +238,13 @@ void PowerRuneProcessor::process_power_rune(const power_rune::RuneInput &detect_
     }
     m_debug_state.current_reprojection = m_power_rune_plane.get_debug_reprojection();
     m_debug_state.reprojection_error = m_power_rune_plane.get_debug_reprojection_error();
+    m_debug_state.uv_pose_active = m_power_rune_plane.get_debug_uv_active();
+    m_debug_state.uv_reprojection_error = m_power_rune_plane.get_debug_uv_reprojection_error();
+    m_debug_state.uv_nis = m_power_rune_plane.get_debug_uv_nis();
+    m_debug_state.uv_rejected_blades = m_power_rune_plane.get_debug_uv_rejected_blades();
+    m_debug_state.pnp_used = m_power_rune_plane.get_debug_pnp_used();
+    m_debug_state.keypoint_reprojection_error =
+        m_power_rune_plane.get_debug_keypoint_reprojection_error();
     
     //估计相位和运动方程
     m_phase_motion_estimator.estimate_phase_motion(inactive_targets);

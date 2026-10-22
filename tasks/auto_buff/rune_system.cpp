@@ -190,6 +190,12 @@ public:
     debug_.center_contours = core_debug.center_contours;
     debug_.current_reprojection = core_debug.current_reprojection;
     debug_.reprojection_error = core_debug.reprojection_error;
+    debug_.uv_pose_active = core_debug.uv_pose_active;
+    debug_.uv_reprojection_error = core_debug.uv_reprojection_error;
+    debug_.uv_nis = core_debug.uv_nis;
+    debug_.uv_rejected_blades = core_debug.uv_rejected_blades;
+    debug_.pnp_used = core_debug.pnp_used;
+    debug_.keypoint_reprojection_error = core_debug.keypoint_reprojection_error;
     debug_.phase = core_debug.phase;
     debug_.continuous_phase = core_debug.continuous_phase;
     debug_.angular_velocity = core_debug.angular_velocity;

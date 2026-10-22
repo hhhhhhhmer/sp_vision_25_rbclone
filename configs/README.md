@@ -317,6 +317,21 @@ power_rune:
 配置文件所在目录为基准。没有覆盖时，使用 `tasks/auto_buff/config/power_rune_defaults.yaml`
 中的默认模型路径。
 
+### 符的 UV 观测
+
+`RuneSystem` 默认使用 UV 观测跟踪符平面：逐帧不再做 PnP，只有建立目标/兜底帧才用
+PnP + Chamfer 给初值。默认开关和全部参数都在 `power_rune.project` 下，机器人 YAML 可以
+局部覆盖，例如关闭 UV 回到原 PnP 链路：
+
+```yaml
+power_rune:
+  project:
+    uv_observation: false
+```
+
+各 UV 参数（噪声、卡方门限、角速度过程噪声、72° 目标切换阈值等）的含义和默认值见
+`tasks/auto_buff/README.md` 的“UV 观测模式”一节。
+
 旧版顶层 `model`、`buff_engine_path`、`buff_*`、`detect.*`、`aim_time`、`wait_time`、
 `command_fire_gap`、`fire_gap_time` 和 `predict_time` 字段已从样例配置中移除，也不会被当前
 `RuneSystem` 读取。

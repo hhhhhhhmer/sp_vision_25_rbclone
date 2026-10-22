@@ -1,4 +1,7 @@
 #pragma once
+#include <array>
+#include <cstddef>
+
 #include<Eigen/Geometry>
 #include<Eigen/Dense>
 #include<Eigen/Core>
@@ -6,6 +9,7 @@
 #include<ceres/rotation.h>
 #include <ceres/jet.h>
 #include "common/power_rune_global.hpp"
+#include "RuneUvPoseFilter.hpp"
 
 
 
@@ -217,13 +221,20 @@ public:
     Projector();
     bool caculate_pose(const std::vector<SingleRuneBlade2D> &rune_blade_2D,
                        const CameraPose & camera_pose,
-                       const cv::Mat &ori_img);
+                       const cv::Mat &ori_img,
+                       const RuneTimestamp &timestamp);
 
     const Eigen::Vector<double,6> get_pose() const;
     const std::vector<const Eigen::Vector3d*>& get_sampled_model_points() const;
     std::vector<cv::Point2f> get_debug_reprojection() const;
     std::optional<double> get_debug_reprojection_error() const;
     std::vector<int> get_inactive_target_location_nums() const;
+    bool get_debug_uv_active() const { return m_uv_pose_active; }//本帧位姿是否来自 UV 更新
+    std::optional<double> get_debug_uv_reprojection_error() const;
+    double get_debug_uv_nis() const;
+    int get_debug_uv_rejected_blades() const;
+    bool get_debug_pnp_used() const { return m_pnp_used_this_frame; }
+    std::optional<double> get_debug_keypoint_reprojection_error() const;
     const int get_another_inactivate_target_location_num() const;
 private:
     //单个符叶匹配对
@@ -234,12 +245,26 @@ private:
         std::vector<std::shared_ptr<std::vector<Eigen::Vector3d>>> model_rune_points;//模型符
         std::vector<std::vector<cv::Point>> matched_contours;//轮廓
         std::vector<cv::Point2f> anchor_points;//锚点
+        std::array<cv::Point2f, 5> keypoints{};//网络五点 [top,left,center,right,bottom]，用于 UV 观测
         Eigen::Vector3d direction_vector;//方向向量
     };
 
     std::vector<RuneBladeCorrespondence> m_rune_correspondence;//整个符的所有匹配对
     std::vector<const Eigen::Vector3d*> m_sampled_model_points;//下采样得到的用于优化的模型点
     int m_another_inactivate_target_location_num = -1;//对于大符来说另一个未激活目标的位置
+
+    RuneUvPoseFilter m_uv_filter;//UV 位姿滤波器
+    bool m_uv_enabled = false;//是否启用 UV 观测
+    bool m_uv_reinitialize_requested = false;//本帧是否请求 PnP 重建
+    bool m_uv_pose_active = false;//本帧 m_pose 是否来自 UV 滤波器
+    double m_uv_reprojection_error = 0.0;//UV 更新后的重投影 RMSE
+    double m_uv_nis = 0.0;//最近一次 UV 更新的 NIS
+    int m_uv_rejected_blades = 0;//本帧被门限拒绝的符叶数
+    bool m_pnp_used_this_frame = false;//本帧是否执行了 PnP/Chamfer
+    double m_keypoint_reprojection_error = 0.0;//网络五点重投影 RMSE
+    int m_keypoint_reprojection_count = 0;//参与统计的关键点数
+    RuneTimestamp m_last_uv_timestamp{};//上一帧 UV 时间戳
+    bool m_has_last_uv_timestamp = false;
 
     bool construct_rune_correspondence(const std::vector<SingleRuneBlade2D> &rune_blade_2D);//符的匹配对
     void set_location(const SingleRuneBlade2D &single_rune_blade_2D);//设置其他位置
@@ -253,8 +278,17 @@ private:
     void find_armor_center_anchor_points(const std::vector<SingleRuneBlade2D> &rune_blade_2D);//TODO：对于已经激活的小符,可以计算其装甲板中心作为锚点
     
     void calculate_distance_transfor();//计算距离变换函数
-    bool minimize_chamfer_distance();//model-base优化
+    bool minimize_chamfer_distance();//model-base优化（UV 模式下只用于初始化/重建）
     void sample_model_points();//对模型点进行下采样
+
+    // ---------------- UV 观测模式 ----------------
+    void load_uv_config();//从全局配置读取 UV 参数
+    void compute_keypoint_reprojection();//用当前位姿计算网络五点重投影误差（PnP/UV 共同指标）
+    bool is_inactive_state(RuneState state) const;
+    std::vector<RuneUvPoseFilter::Observation> collect_uv_observations() const;//收集未激活符叶五点
+    void apply_uv_pose(const CameraPose &camera_pose, const RuneTimestamp &timestamp);//预测 + 更新 + 写回 m_pose
+    bool initialize_uv_pose(const CameraPose &camera_pose, const RuneTimestamp &timestamp);//PnP 初值 + UV 精化 + 建立滤波器
+
 
     bool is_valid_for_projection(const SingleRuneBlade2D &single_rune_blade_2D);//判断是否可以用于投影
     Eigen::Vector3d calculate_direction_vector(const SingleRuneBlade2D &single_rune_blade_2D);//从符心到靶心的方向向量
@@ -324,6 +358,12 @@ public:
     const InactiveTargets get_inactive_targets() const;
     std::vector<cv::Point2f> get_debug_reprojection() const;
     std::optional<double> get_debug_reprojection_error() const;
+    bool get_debug_uv_active() const;
+    std::optional<double> get_debug_uv_reprojection_error() const;
+    double get_debug_uv_nis() const;
+    int get_debug_uv_rejected_blades() const;
+    bool get_debug_pnp_used() const;
+    std::optional<double> get_debug_keypoint_reprojection_error() const;
 private:
     std::shared_ptr<std::vector<cv::Point3f>> m_anchor_inactive_points_world_ptr;//未激活的符叶的模型锚框点
     std::shared_ptr<std::vector<Eigen::Vector3d>> m_plane_points_ptr;//用于拟合平面的点

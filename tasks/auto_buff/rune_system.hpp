@@ -58,6 +58,12 @@ struct RuneDebugSnapshot
   std::vector<cv::Point2f> current_reprojection;
   std::vector<cv::Point2f> predicted_reprojection;
   std::optional<double> reprojection_error;
+  bool uv_pose_active = false;
+  std::optional<double> uv_reprojection_error;
+  double uv_nis = 0.0;
+  int uv_rejected_blades = 0;
+  bool pnp_used = false;
+  std::optional<double> keypoint_reprojection_error;
   std::optional<double> phase;
   std::optional<double> continuous_phase;
   std::optional<double> angular_velocity;

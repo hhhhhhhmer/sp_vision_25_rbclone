@@ -156,7 +156,8 @@ void PowerRunePlane::update_power_rune_plane(const RefinedRuneObservation &refin
     //新的投影类计算姿态
     if(!m_projector.caculate_pose(refined_rune_observation.rune_blade_2D,
                                   refined_rune_observation.camera_pose,
-                                  refined_rune_observation.ori_img))
+                                  refined_rune_observation.ori_img,
+                                  refined_rune_observation.timestamp))
     {
         // 说明计算失败
         return;
@@ -831,6 +832,36 @@ std::optional<double> PowerRunePlane::get_debug_reprojection_error() const
     return m_projector.get_debug_reprojection_error();
 }
 
+bool PowerRunePlane::get_debug_uv_active() const
+{
+    return m_projector.get_debug_uv_active();
+}
+
+std::optional<double> PowerRunePlane::get_debug_uv_reprojection_error() const
+{
+    return m_projector.get_debug_uv_reprojection_error();
+}
+
+double PowerRunePlane::get_debug_uv_nis() const
+{
+    return m_projector.get_debug_uv_nis();
+}
+
+int PowerRunePlane::get_debug_uv_rejected_blades() const
+{
+    return m_projector.get_debug_uv_rejected_blades();
+}
+
+bool PowerRunePlane::get_debug_pnp_used() const
+{
+    return m_projector.get_debug_pnp_used();
+}
+
+std::optional<double> PowerRunePlane::get_debug_keypoint_reprojection_error() const
+{
+    return m_projector.get_debug_keypoint_reprojection_error();
+}
+
 
 Projector::Projector()
 {
@@ -864,15 +895,289 @@ Projector::Projector()
     m_big_power_rune_active_points_model_3_ptr = std::make_shared<std::vector<Eigen::Vector3d>>(big_power_rune_active_points_model_3);
     m_big_power_rune_active_points_model_4_ptr = std::make_shared<std::vector<Eigen::Vector3d>>(big_power_rune_active_points_model_4);
     m_big_power_rune_active_points_model_5_ptr = std::make_shared<std::vector<Eigen::Vector3d>>(big_power_rune_active_points_model_5);
+
+    load_uv_config();
+}
+
+void Projector::load_uv_config()
+{
+    // 所有键都给默认值，旧配置文件即使没有 UV 段也能正常工作。
+    const auto project = J_POWER_RUNE.config_["project"];
+    const auto read_bool = [&](const char *key, bool fallback) {
+        try {
+            const RuneConfigNode node = project[key];
+            try {
+                return static_cast<bool>(node);
+            } catch (...) {
+                // yaml-cpp 的 as<bool> 不接受 0/1；兼容现有的 1/0 配置习惯。
+                return static_cast<int>(node) != 0;
+            }
+        } catch (...) {
+            return fallback;
+        }
+    };
+    const auto read_double = [&](const char *key, double fallback) {
+        try {
+            const double value = static_cast<double>(project[key]);
+            return std::isfinite(value) ? value : fallback;
+        } catch (...) {
+            return fallback;
+        }
+    };
+
+    RuneUvPoseConfig config;
+    config.enabled = read_bool("uv_observation", true);
+    config.sigma_px = read_double("uv_sigma_px", config.sigma_px);
+    config.sigma_center_px = read_double("uv_sigma_center_px", config.sigma_center_px);
+    config.anchor_sigma_px = read_double("uv_anchor_sigma_px", config.anchor_sigma_px);
+    config.gate_chi2 = read_double("uv_gate_chi2", config.gate_chi2);
+    config.switch_rmse_px = read_double("uv_switch_rmse_px", config.switch_rmse_px);
+    config.initial_rotation_sigma_deg =
+        read_double("uv_initial_rotation_sigma_deg", config.initial_rotation_sigma_deg);
+    config.initial_translation_sigma_m =
+        read_double("uv_initial_translation_sigma_m", config.initial_translation_sigma_m);
+    config.process_rotation_sigma_deg =
+        read_double("uv_process_rotation_sigma_deg", config.process_rotation_sigma_deg);
+    config.process_translation_sigma_m =
+        read_double("uv_process_translation_sigma_m", config.process_translation_sigma_m);
+    config.initial_angular_velocity_sigma =
+        read_double("uv_initial_angular_velocity_sigma", config.initial_angular_velocity_sigma);
+    config.process_angular_velocity_sigma =
+        read_double("uv_process_angular_velocity_sigma", config.process_angular_velocity_sigma);
+    config.max_prediction_gap_s =
+        read_double("uv_max_prediction_gap_s", config.max_prediction_gap_s);
+    config.circle_radius = read_double("uv_circle_radius", config.circle_radius);
+    config.circle_center_radius =
+        read_double("uv_circle_center_radius", config.circle_center_radius);
+
+    m_uv_filter.configure(config, J_POWER_RUNE.camera_matrix(), J_POWER_RUNE.distortion());
+    m_uv_enabled = config.enabled;
+}
+
+bool Projector::is_inactive_state(RuneState state) const
+{
+    return state == RuneState::SmallInactive || state == RuneState::BigInactive;
+}
+
+std::vector<RuneUvPoseFilter::Observation> Projector::collect_uv_observations() const
+{
+    std::vector<RuneUvPoseFilter::Observation> observations;
+    observations.reserve(m_rune_correspondence.size());
+    for (const auto &correspondence : m_rune_correspondence)
+    {
+        if (!is_inactive_state(correspondence.rune_state)) continue;
+        if (correspondence.location_num < 1 || correspondence.location_num > 5) continue;
+
+        RuneUvPoseFilter::Observation observation;
+        observation.location_num = correspondence.location_num;
+        observation.keypoints = correspondence.keypoints;
+        bool valid = true;
+        for (const auto &point : observation.keypoints)
+        {
+            if (!std::isfinite(point.x) || !std::isfinite(point.y))
+            {
+                valid = false;
+                break;
+            }
+        }
+        if (valid && correspondence.anchor_points.size() == 4)
+        {
+            for (int i = 0; i < 4; ++i)
+            {
+                observation.anchors[i] = correspondence.anchor_points[i];
+                if (!std::isfinite(observation.anchors[i].x) ||
+                    !std::isfinite(observation.anchors[i].y))
+                {
+                    valid = false;
+                    break;
+                }
+            }
+            observation.has_anchors = valid;
+        }
+        if (valid) observations.emplace_back(observation);
+    }
+    return observations;
+}
+
+void Projector::apply_uv_pose(const CameraPose &camera_pose, const RuneTimestamp &timestamp)
+{
+    m_uv_pose_active = false;
+    if (!m_uv_filter.initialized())
+    {
+        m_uv_reinitialize_requested = true;
+        return;
+    }
+
+    const double dt = m_has_last_uv_timestamp
+                          ? std::chrono::duration<double>(timestamp - m_last_uv_timestamp).count()
+                          : 0.0;
+    m_last_uv_timestamp = timestamp;
+    m_has_last_uv_timestamp = true;
+
+    if (!m_uv_filter.predict(camera_pose, dt))
+    {
+        // 时间戳倒退/间隔过大：下一帧交给 PnP 重建，本帧不使用过期预测。
+        m_uv_reinitialize_requested = true;
+        return;
+    }
+
+    const std::vector<RuneUvPoseFilter::Observation> observations = collect_uv_observations();
+    const bool updated = m_uv_filter.update(camera_pose, observations);
+
+    const auto &diagnostics = m_uv_filter.diagnostics();
+    m_uv_reprojection_error = diagnostics.reprojection_rmse_px;
+    m_uv_nis = diagnostics.nis;
+    m_uv_rejected_blades = diagnostics.rejected_blades;
+
+    m_last_reprojection_error = m_uv_reprojection_error;
+    m_pose = m_uv_filter.pose_in_camera(camera_pose);
+    // 本帧没有接受任何 UV 观测时不把预测位姿交给后续平面拟合：
+    // 调用方会立即走一次 PnP 重建，避免相机快速转动时连续几帧用过期位姿。
+    m_uv_pose_active = updated;
+}
+
+std::optional<double> Projector::get_debug_uv_reprojection_error() const
+{
+    if (!m_uv_pose_active || m_uv_reprojection_error <= 0.0) return std::nullopt;
+    return m_uv_reprojection_error;
+}
+
+double Projector::get_debug_uv_nis() const
+{
+    return m_uv_nis;
+}
+
+int Projector::get_debug_uv_rejected_blades() const
+{
+    return m_uv_rejected_blades;
+}
+
+bool Projector::initialize_uv_pose(const CameraPose &camera_pose, const RuneTimestamp &timestamp)
+{
+    if (!minimize_chamfer_distance())
+    {
+        return false;
+    }
+
+    // PnP 兜底重建时保留已经收敛的角速度，避免每掉一次帧就重新收敛；
+    // 首次建立目标和模式切换时 was_initialized 为 false，仍然从 0 开始。
+    const bool was_initialized = m_uv_filter.initialized();
+    const bool filter_ready = m_uv_filter.initialize(camera_pose, m_pose, was_initialized);
+
+    const auto &diagnostics = m_uv_filter.diagnostics();
+    m_uv_reinitialize_requested = !filter_ready;
+    m_uv_nis = 0.0;
+    m_uv_rejected_blades = 0;
+    m_uv_reprojection_error = filter_ready ? diagnostics.reprojection_rmse_px : 0.0;
+    // m_last_reprojection_error 已由 minimize_chamfer_distance 写入 PnP/Chamfer
+    // 的误差，本帧不要再被 UV 的 0 覆盖。
+    m_last_uv_timestamp = timestamp;
+    m_has_last_uv_timestamp = true;
+    // 本帧位姿来自 PnP；下一帧 UV 更新成功后才会重新置 true。
+    m_uv_pose_active = false;
+    sample_model_points();
+    if (!filter_ready)
+    {
+        LOG(WARNING) << "[Projector]UV滤波器初始化失败，下一帧继续尝试PnP";
+    }
+    return true;
+}
+
+void Projector::compute_keypoint_reprojection()
+{
+    m_keypoint_reprojection_error = 0.0;
+    m_keypoint_reprojection_count = 0;
+    if (!m_pose.allFinite()) return;
+
+    const cv::Vec3d rvec(m_pose[0], m_pose[1], m_pose[2]);
+    const cv::Vec3d tvec(m_pose[3], m_pose[4], m_pose[5]);
+    double squared_error = 0.0;
+    int count = 0;
+
+    for (const auto &correspondence : m_rune_correspondence)
+    {
+        if (!is_inactive_state(correspondence.rune_state)) continue;
+        // 只用 1 号位（火控实际瞄准的未激活目标）统计；大符另一片只做补充观测，
+        // 其关键点模型与靶心环不完全一致，混进来会污染指标。
+        if (correspondence.location_num != 1) continue;
+        bool valid = true;
+        for (const auto &point : correspondence.keypoints)
+        {
+            if (!std::isfinite(point.x) || !std::isfinite(point.y))
+            {
+                valid = false;
+                break;
+            }
+        }
+        if (!valid) continue;
+
+        const int location = std::clamp(correspondence.location_num, 1, 5);
+        const double angle = (location - 1) * 2.0 * CV_2PI / 5.0;
+        const Eigen::Matrix3d R_location =
+            Eigen::AngleAxisd(angle, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+        const double center_radius = m_uv_filter.config().circle_center_radius;
+        const double radius = m_uv_filter.config().circle_radius;
+        const Eigen::Vector3d center =
+            R_location * Eigen::Vector3d(0.0, -center_radius, 0.0);
+        const std::array<Eigen::Vector3d, 4> offsets{{
+            Eigen::Vector3d(0.0, -radius, 0.0),
+            Eigen::Vector3d(-radius, 0.0, 0.0),
+            Eigen::Vector3d(radius, 0.0, 0.0),
+            Eigen::Vector3d(0.0, radius, 0.0),
+        }};
+        const std::array<Eigen::Vector3d, 5> local{{
+            center + R_location * offsets[0],
+            center + R_location * offsets[1],
+            Eigen::Vector3d::Zero(),
+            center + R_location * offsets[2],
+            center + R_location * offsets[3],
+        }};
+
+        std::vector<cv::Point3d> object_points;
+        object_points.reserve(5);
+        for (const auto &point : local)
+        {
+            object_points.emplace_back(point.x(), point.y(), point.z());
+        }
+        std::vector<cv::Point2d> image_points;
+        cv::projectPoints(object_points, rvec, tvec, CAM, DIS, image_points);
+        if (image_points.size() != 5) continue;
+
+        for (int i = 0; i < 5; ++i)
+        {
+            if (!std::isfinite(image_points[i].x) || !std::isfinite(image_points[i].y)) continue;
+            const double dx = image_points[i].x - correspondence.keypoints[i].x;
+            const double dy = image_points[i].y - correspondence.keypoints[i].y;
+            squared_error += dx * dx + dy * dy;
+            ++count;
+        }
+    }
+
+    m_keypoint_reprojection_count = count;
+    if (count > 0)
+    {
+        m_keypoint_reprojection_error = std::sqrt(squared_error / static_cast<double>(count));
+    }
+}
+
+std::optional<double> Projector::get_debug_keypoint_reprojection_error() const
+{
+    if (m_keypoint_reprojection_count <= 0) return std::nullopt;
+    return m_keypoint_reprojection_error;
 }
 
 bool Projector::caculate_pose(const std::vector<SingleRuneBlade2D> &rune_blade_2D,
                               const CameraPose &camera_pose,
-                              const cv::Mat &ori_img)
+                              const cv::Mat &ori_img,
+                              const RuneTimestamp &timestamp)
 {
     m_camera_pose = camera_pose;
     (void)ori_img;
-    
+    m_pnp_used_this_frame = false;
+    m_uv_pose_active = false;
+    m_keypoint_reprojection_error = 0.0;
+    m_keypoint_reprojection_count = 0;
+
     //根据语义构建符模型
     if (!construct_rune_correspondence(rune_blade_2D))
     {
@@ -882,12 +1187,48 @@ bool Projector::caculate_pose(const std::vector<SingleRuneBlade2D> &rune_blade_2
     //根据m_rune_correspondence构建距离变换函数
     calculate_distance_transfor();
 
+    if (m_uv_enabled)
+    {
+        // UV 模式：只有首次建立目标/滤波器失效时才跑一次 PnP+Chamfer 给初值，
+        // 之后的每一帧都在像素域用五点关键点做 EKF 更新。
+        const bool need_pnp = !m_uv_filter.initialized() || m_uv_reinitialize_requested;
+        if (need_pnp)
+        {
+            if (!initialize_uv_pose(camera_pose, timestamp))
+            {
+                m_uv_reinitialize_requested = true;
+                m_uv_pose_active = false;
+                return false;
+            }
+            return true;
+        }
+
+        apply_uv_pose(camera_pose, timestamp);
+        if (!m_uv_pose_active)
+        {
+            // 预测失效时本帧立即回退到 PnP 重建，避免把过期位姿送进后续平面拟合。
+            if (!initialize_uv_pose(camera_pose, timestamp))
+            {
+                m_uv_reinitialize_requested = true;
+                return false;
+            }
+            return true;
+        }
+
+        // 调试重投影仍然沿用原有模型点采样，只是位姿来自 UV 滤波器。
+        sample_model_points();
+        m_uv_pose_active = true;
+        compute_keypoint_reprojection();
+        return true;
+    }
+
     //进行优化
     if (!minimize_chamfer_distance())
     {
         return false;
     }
 
+    compute_keypoint_reprojection();
     return true;
 }
 
@@ -1032,6 +1373,8 @@ void Projector::set_location_x(int location_x, const SingleRuneBlade2D &single_r
        LOG(ERROR) << "[Projector]set_location传入了异常位置";
        throw std::runtime_error("[Projector]set_location传入了异常位置");
     }
+
+    const std::size_t correspondence_count_before = m_rune_correspondence.size();
 
     switch (single_rune_blade_2D.rune_state)
     {
@@ -1257,6 +1600,19 @@ void Projector::set_location_x(int location_x, const SingleRuneBlade2D &single_r
         }
         break;
     }
+    }
+
+    // 本次调用最多添加一条匹配对；统一把网络五点挂到新增的匹配对上，
+    // 供 UV 观测使用，避免在每一处 emplace_back 后重复拷贝。
+    if (m_rune_correspondence.size() > correspondence_count_before)
+    {
+        auto &correspondence = m_rune_correspondence.back();
+        correspondence.keypoints = {
+            single_rune_blade_2D.rune_info.top,
+            single_rune_blade_2D.rune_info.left,
+            single_rune_blade_2D.rune_info.point_R,
+            single_rune_blade_2D.rune_info.right,
+            single_rune_blade_2D.rune_info.bottom};
     }
 
     return;
@@ -1653,6 +2009,7 @@ bool Projector::minimize_chamfer_distance()
     {
         // 赋值
         m_pose = pose;
+        m_pnp_used_this_frame = true;
         m_last_reprojection_error = std::sqrt(
             std::max(0.0, summary.final_cost) /
             std::max(1, summary.num_residuals));

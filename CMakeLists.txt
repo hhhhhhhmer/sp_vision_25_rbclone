@@ -340,6 +340,14 @@ target_compile_definitions(rune_motion_fit_test PRIVATE
 add_test(NAME rune_motion_fit_test COMMAND rune_motion_fit_test
     ${PROJECT_SOURCE_DIR}/configs/sb_long.yaml)
 
+add_executable(rune_uv_pose_filter_test tests/rune_uv_pose_filter_test.cpp)
+target_link_libraries(
+    rune_uv_pose_filter_test
+    ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io)
+target_include_directories(rune_uv_pose_filter_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/tasks/auto_buff/rp_core/include)
+add_test(NAME rune_uv_pose_filter_test COMMAND rune_uv_pose_filter_test)
+
 add_executable(rune_pose_adapter_test tests/rune_pose_adapter_test.cpp)
 target_link_libraries(
     rune_pose_adapter_test

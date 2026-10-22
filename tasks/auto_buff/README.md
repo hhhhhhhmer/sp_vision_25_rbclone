@@ -12,6 +12,7 @@
 | `detector/` | `RuneDetector` 五点推理（OpenVINO / TensorRT 两套后端）及 TRT 预处理 kernel |
 | `adapter/pose_adapter.*` | 项目 IMU 姿态 → RP 核心 `CameraPose` 适配 |
 | `rp_core/include`、`rp_core/src` | 上游 RP 算法：`PowerRuneProcessor`、`RuneDecisionModule`、`PowerRunePlane`（Chamfer 位姿）、`RuneObservationRefiner`、`PhaseMotionEstimator` 与 `big_rune_motion_estimate/`、`PowerRuneBallisticModel`；配置中心 `PowerRuneConfigStore`（全局 `J_POWER_RUNE`） |
+| `rp_core/include/RuneUvPoseFilter.hpp`、`rp_core/src/RuneUvPoseFilter.cpp` | 符平面 UV 观测 EKF（逐帧替代 PnP） |
 | `rp_core/config/` | `json.hpp`（YAML 包装）、`PnPVariable.hpp` |
 | `config/power_rune_defaults.yaml` | RP 算法默认参数 |
 | `models/` | `model-0624.onnx`（+ 本机生成的 `*-fp16.engine`） |
@@ -38,6 +39,93 @@
 和失败关闭原因。算法核心不会创建或管理 GUI 窗口，调试渲染由调用方完成：参考实现见
 `rune_debug_draw.hpp`（OpenCV 绘制）和 `tests/auto_buff_test.cpp`；`rp_core` 里
 `foxglove::schemas` 下的结构体只是本地兼容桩，不产生实际可视化输出。
+
+## UV 观测模式（默认开启）
+
+符的自瞄与装甲板走同一套思路：**逐帧不再调用 PnP**，而是把网络五点和轮廓锚框点直接
+作为像素观测，用一个 7 维 EKF 维护符平面位姿：
+
+- 状态：`[旋转(3), 平移(3), 绕符平面法向的角速度(1)]`，旋转按右乘误差更新；
+  状态在 `world_to_rp` 后的固定 RP 系里（代码沿用了 `car` 的命名），相机/云台转动
+  只影响像素观测，不参与状态传播；
+- 观测：每片未激活符叶的 5 个网络关键点（外侧、左侧、中心 R、右侧、内侧）+
+  4 个整片符叶 PCA 锚框点（外左、内左、内右、外右）；
+- 预测：只按角速度让符叶绕自身 z 轴旋转；角速度通过状态转移协方差与旋转耦合，
+  由 UV 观测间接更新；
+- 目标切换：只有 1 号位（当前跟踪片）允许尝试 72° 整数倍旋转假设，明显更优时
+  重定义状态帧；其他位置号只做门限/拒绝，避免 5 次对称性把位置号误差吸收成
+  状态旋转、污染 1 号位；
+- 兜底：本帧没有任何可接受的 UV 观测时，立即回退到原有 PnP + Chamfer 重建，
+  因此短时遮挡/快速运动不会把过期位姿送进火控。PnP 兜底重建会保留已经收敛的
+  角速度（首次建立目标和模式切换仍从 0 开始），避免每掉一帧就重新收敛。
+
+相关配置都在 `project` 节点下，机器人 YAML 可用顶层 `power_rune.project` 覆盖：
+
+| 字段 | 默认值 | 作用 |
+| --- | --- | --- |
+| `uv_observation` | `true` | 是否启用 UV 观测；`false` 时完全走原 PnP 链路 |
+| `uv_sigma_px` | `3.0` | 网络关键点检测噪声，px |
+| `uv_sigma_center_px` | `1.5` | 中心 R 点检测噪声，px |
+| `uv_anchor_sigma_px` | `4.0` | 轮廓锚框点检测噪声，px |
+| `uv_gate_chi2` | `200.0` | 单符叶观测卡方门限 |
+| `uv_switch_rmse_px` | `10.0` | 触发 72° 目标切换搜索的预测 RMSE 阈值，px |
+| `uv_initial_rotation_sigma_deg` | `5.0` | PnP 初值的旋转标准差，deg |
+| `uv_initial_translation_sigma_m` | `0.15` | PnP 初值的平移标准差，m |
+| `uv_initial_angular_velocity_sigma` | `2.0` | 角速度初值标准差，rad/s |
+| `uv_process_rotation_sigma_deg` | `0.2` | 每帧旋转过程噪声，deg |
+| `uv_process_translation_sigma_m` | `0.015` | 每帧平移过程噪声，m |
+| `uv_process_angular_velocity_sigma` | `1.0` | 角速度过程噪声，rad/s |
+| `uv_max_prediction_gap_s` | `0.25` | 超过该间隔不信任预测，直接重建，s |
+| `uv_circle_radius` | `0.15` | 靶心圆半径，m |
+| `uv_circle_center_radius` | `0.7` | 靶心圆中心到符心距离，m |
+
+调试接口：`RuneDebugSnapshot::uv_pose_active`、`uv_reprojection_error`、`uv_nis`、
+`uv_rejected_blades`。其中 `uv_pose_active` 只在本帧 UV 更新成功时为 true，PnP
+初值/兜底帧为 false；`rune_debug_draw.hpp` 会在画面上显示 UV 状态和重投影 RMSE。
+
+### 视频回放测试
+
+`tests/auto_buff_test.cpp` 支持指定起始帧、帧数和命令 CSV：
+
+```bash
+./build/auto_buff_test --headless=true --config-path=configs/xiaohei.yaml \
+  --start-frame=14400 --max-frames=300 --mode=small --color=red \
+  --dump-commands=/tmp/red_uv.csv yolo_buff/123/红.mp4
+```
+
+在 `yolo_buff/123` 的蓝符、大符和红符片段上，UV 模式与 PnP 的 `found_frames` 基本一致
+（300 帧内相差 0~2 帧），大部分帧使用 UV 跟踪；遮挡/快速运动导致的少数帧会自动回退到 PnP。
+注意离线视频没有 IMU，测试程序传入的是单位四元数；UV 状态在固定 RP 系中，所以
+云台转动本来就不应该改变状态，实车 IMU 只用于把观测投到像素，不会额外引入预测旋转。
+
+`auto_buff_test` 会同时输出一个 PnP/UV 共用的精度指标 `kp_rmse_avg`：用最终位姿把
+1 号位未激活符叶的 5 个网络关键点重投影回图像，统计像素 RMSE。当前机器上的实测
+（300 帧，`-O3 Release`）：
+
+| 视频片段 | 模式 | found | 1 号位五点 RMSE | PnP 帧数 | core 平均耗时 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `蓝.mp4`（small/blue） | PnP | 253 | 7.84 px | 279 | 1.45 ms |
+| `蓝.mp4`（small/blue） | UV | 253 | **3.15 px** | **15** | **1.03 ms** |
+| `big_buff.avi`（big/blue） | PnP | 158 | 9.62 px | 257 | 1.79 ms |
+| `big_buff.avi`（big/blue） | UV | 158 | **5.14 px** | **35** | **1.34 ms** |
+| `红.mp4`（第 14400 帧起，small/red） | PnP | 201 | 6.45 px | 227 | 1.18 ms |
+| `红.mp4`（第 14400 帧起，small/red） | UV | 201 | **2.36 px** | **25** | **0.83 ms** |
+
+折算下来：
+
+- 1 号位关键点重投影 RMSE：小符降低约 **60%**，大符降低约 **46%**；
+- 逐帧 PnP/Chamfer 次数：降低约 **86%~95%**（只剩建立目标、兜底帧）；
+- `core_ms`：降低约 **25%~30%**；
+- `found_frames`：三段视频与 PnP 完全一致；
+- 命令稳定性：UV 与 PnP 的 yaw/pitch 差异 RMS 在 0.02° 以内（蓝符约 0.004°/0.006°，
+  红符约 0.015°/0.018°），开火决策在共同 found 帧上约 97% 一致；二阶差分 RMS 两者
+  接近，蓝符 UV 略低、红符 pitch 略高，具体数值受视频片段影响较大，建议以实车数据为准。
+
+注：UV 模式的 `kp_rmse_avg` 只统计 UV 更新成功的帧，PnP 初值/兜底帧没有计入；
+PnP 基线包含全部帧。因此 UV 的 RMSE 数值略偏乐观，比较时请留意统计口径。
+
+这些数字是离线视频、单位 IMU 下的结果；UV 状态在固定系、预测只含符自身角速度，
+所以实车真实 IMU 主要改善观测投影和云台运动下的 PnP 初值，不会改变这里的预测模型。
 
 ## 配置规则
 

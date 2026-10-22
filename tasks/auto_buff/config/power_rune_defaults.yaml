@@ -69,7 +69,23 @@
     "anchor_reproj_weight": 7.0,
     "max_chamfer_residual": 50.0,
     "k_axis_y_constraint_weight_total": 500,
-    "half_interval": 0.5235987756
+    "half_interval": 0.5235987756,
+
+    "uv_observation": true,
+    "uv_sigma_px": 3.0,
+    "uv_sigma_center_px": 1.5,
+    "uv_anchor_sigma_px": 4.0,
+    "uv_gate_chi2": 200.0,
+    "uv_switch_rmse_px": 10.0,
+    "uv_initial_rotation_sigma_deg": 5.0,
+    "uv_initial_translation_sigma_m": 0.15,
+    "uv_process_rotation_sigma_deg": 0.2,
+    "uv_process_translation_sigma_m": 0.015,
+    "uv_initial_angular_velocity_sigma": 2.0,
+    "uv_process_angular_velocity_sigma": 1.0,
+    "uv_max_prediction_gap_s": 0.25,
+    "uv_circle_radius": 0.15,
+    "uv_circle_center_radius": 0.7
   },
 
   "plane":

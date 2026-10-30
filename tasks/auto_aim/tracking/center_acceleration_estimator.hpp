@@ -12,7 +12,8 @@ namespace auto_aim
 
 struct CenterAccelerationEstimatorConfig
 {
-  bool enabled = true;
+  // A/B 实测：默认关闭。需要时在 YAML 里显式设置 center_accel_ff_enabled: true。
+  bool enabled = false;
   double window_seconds = 0.25;
   std::size_t min_samples = 6;
   double min_span_seconds = 0.12;

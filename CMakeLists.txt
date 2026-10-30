@@ -310,6 +310,19 @@ add_executable(rb_auto_standard_async src/rb_auto_standard_async.cpp)
 add_executable(rb_auto_standard_debug_async src/rb_auto_standard_debug_async.cpp)
 add_executable(rb_auto_aim_debug_fft  src/rb_auto_aim_debug_fft.cpp)
 
+# rm_aim_sim 本机共享内存接入：复用 auto_aim 的 YOLO/Solver/Tracker/Planner，
+# 不依赖 ROS。协议见 rm_aim_sim 仓库 docs/protocol.md。
+add_executable(rm_aim_sim_client src/rm_aim_sim_client.cpp)
+target_link_libraries(rm_aim_sim_client
+    ${OpenCV_LIBS} fmt::fmt spdlog::spdlog yaml-cpp nlohmann_json::nlohmann_json
+    auto_aim tools io)
+
+# 同一套共享内存协议，算法入口换成 auto_buff::RuneSystem（能量机关/打符）。
+add_executable(rm_aim_sim_rune_client src/rm_aim_sim_rune_client.cpp)
+target_link_libraries(rm_aim_sim_rune_client
+    ${OpenCV_LIBS} fmt::fmt spdlog::spdlog yaml-cpp nlohmann_json::nlohmann_json
+    auto_buff tools io)
+
 target_link_libraries(rb_auto_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(rb_auto_standard_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(rb_auto_standard_async ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)

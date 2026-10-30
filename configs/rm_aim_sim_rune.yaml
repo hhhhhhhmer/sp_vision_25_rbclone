@@ -1,0 +1,45 @@
+# rm_aim_sim 能量机关（打符）接入配置
+#
+# 运行目录约定为 build/；本文件同时被 RuneSystem 读取，只使用下面这些字段：
+#   camera_matrix / distort_coeffs / R_gimbal2imubody / R_camera2gimbal / t_camera2gimbal
+#   yaw_offset / pitch_offset，以及可选的 power_rune 节点（覆盖 auto_buff 默认参数）。
+#
+# 重要：RuneSystem 在构造时读一次内参，之后不会随帧更新。所以这里的
+# camera_matrix 必须与仿真当前相机完全一致（仿真默认 1440x1080、垂直 FOV 45°）。
+# 在仿真界面改分辨率/视场角后，必须同步改这里的值，程序启动时也会打印不一致告警。
+# 默认值：fx = fy = 0.5 * 1080 / tan(45°/2) = 1303.6753236814714，cx=720，cy=540。
+
+enemy_color: "blue"  # 仅说明用；客户端默认按仿真的 target team 自动选色
+
+camera_matrix: [1303.6753236814714, 0, 720, 0, 1303.6753236814714, 540, 0, 0, 1]
+distort_coeffs: [0, 0, 0, 0, 0]
+# 仿真没有 IMU 中间系，客户端直接把 frame.json 的 gimbal.quaternion_wxyz 当作
+# gimbal->world 传入，所以这里填单位阵。
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+# camera optical (x右/y下/z前) -> gimbal (x前/y左/z上)，与 frame.json 一致。
+R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+t_camera2gimbal: [0.08, 0, 0.04]
+
+# 打符角度偏置（度）。仿真图像没有标定误差，先保持 0。
+yaw_offset: 0
+pitch_offset: 0
+
+# 可选：覆盖 auto_buff 的默认参数（默认值见
+# tasks/auto_buff/config/power_rune_defaults.yaml）。只在需要时打开。
+# power_rune:
+#   detector:
+#     # 默认 onnx 路径为 tasks/auto_buff/models/model-0624.onnx；相对本文件写路径时用
+#     # ../tasks/auto_buff/models/<your_model>.onnx
+#     confidence_threshold: 0.65
+#     keypoint_confidence_threshold: 0.5
+#   project:
+#     uv_observation: true
+
+# 仿真专用的小符相位滤波参数：仿真帧率 20~30 fps，且当前检测在部分靶面角度上会
+# 丢帧，默认的 0.1 s / 20 帧连续观测很难满足。这两项只影响“攒多少帧确认旋转方向”，
+# 不改变检测阈值；换回实车配置时请删掉这个节点。
+power_rune:
+  small_phase_estimate:
+    max_data_interval: 0.25
+    min_size_to_confirm_rotation: 10
+

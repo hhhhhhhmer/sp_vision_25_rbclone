@@ -87,7 +87,10 @@ public:
     double delay_time =
       (std::abs(target->ekf_x()[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_) + gimbal_delay_;
 
-    if(std::abs(target->ekf_x()[7]) > decision_speed_) tools::logger()->warn("std::abs(target->ekf_x()[7]) > {}", decision_speed_);
+    // 逐帧诊断放 debug：控制循环 100~200 Hz，用 warn 会刷屏（文件日志仍保留）。
+    if (std::abs(target->ekf_x()[7]) > decision_speed_) {
+      tools::logger()->debug("std::abs(target->ekf_x()[7]) > {}", decision_speed_);
+    }
 
     auto future = std::chrono::steady_clock::now() + std::chrono::microseconds(int(delay_time * 1e6));
     is_far = false;

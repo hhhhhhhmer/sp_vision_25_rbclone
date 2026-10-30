@@ -36,7 +36,20 @@ int main()
   const auto origin = Estimator::TimePoint{};
   const std::vector<double> steps{0.018, 0.023, 0.021, 0.026, 0.019, 0.024};
 
-  Estimator insufficient;
+  // The shipped default is OFF; enable explicitly for the behaviour tests below.
+  CHECK(!auto_aim::CenterAccelerationEstimatorConfig{}.enabled);
+  auto enabled_config = auto_aim::CenterAccelerationEstimatorConfig{};
+  enabled_config.enabled = true;
+
+  Estimator default_estimator;
+  for (int index = 0; index < 10; ++index) {
+    default_estimator.add_sample(
+      at_seconds(origin, index * 0.02), position(index * 0.02, {2.0, -1.0}));
+  }
+  CHECK(default_estimator.sample_count() == 0);
+  CHECK(!default_estimator.valid(at_seconds(origin, 0.2)));
+
+  Estimator insufficient(enabled_config);
   double time = 0.0;
   for (int index = 0; index < 5; ++index) {
     time += steps[static_cast<std::size_t>(index) % steps.size()];
@@ -45,7 +58,7 @@ int main()
   CHECK(!insufficient.valid(at_seconds(origin, time)));
   CHECK(insufficient.acceleration(at_seconds(origin, time)).isZero(0.0));
 
-  Estimator constant_acceleration;
+  Estimator constant_acceleration(enabled_config);
   time = 0.0;
   for (int index = 0; index < 45; ++index) {
     time += steps[static_cast<std::size_t>(index) % steps.size()];
@@ -61,7 +74,7 @@ int main()
   CHECK(constant_acceleration.last_fit_rmse() < 0.01);
   const double constant_acceleration_time = time;
 
-  Estimator constant_velocity;
+  Estimator constant_velocity(enabled_config);
   time = 0.0;
   for (int index = 0; index < 35; ++index) {
     time += steps[static_cast<std::size_t>(index) % steps.size()];
@@ -75,6 +88,7 @@ int main()
           .isZero(0.0));
 
   auto_aim::CenterAccelerationEstimatorConfig limited_config;
+  limited_config.enabled = true;
   limited_config.window_seconds = 0.2;
   limited_config.min_samples = 3;
   limited_config.min_span_seconds = 0.015;
@@ -98,7 +112,7 @@ int main()
   CHECK(limited.sample_count() == 1);
   CHECK(!limited.valid(at_seconds(origin, 0.01)));
 
-  Estimator gap_reset;
+  Estimator gap_reset(enabled_config);
   gap_reset.add_sample(at_seconds(origin, 0.0), Eigen::Vector2d::Zero());
   gap_reset.add_sample(at_seconds(origin, 0.02), Eigen::Vector2d::Zero());
   gap_reset.add_sample(at_seconds(origin, 0.18), Eigen::Vector2d::Zero());

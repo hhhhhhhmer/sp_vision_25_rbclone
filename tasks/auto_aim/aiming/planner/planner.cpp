@@ -429,7 +429,10 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   is_far = min_dist > 5.0;
   is_high = target_h > 1.3;
 
-  tools::logger()->info("h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", target_h, min_dist, xyz.norm(), bullet_traj.fly_time);
+  // 每个规划周期都会执行，放 debug；否则 100~200 Hz 的控制循环会把控制台刷满。
+  tools::logger()->debug(
+    "h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", target_h, min_dist, xyz.norm(),
+    bullet_traj.fly_time);
 
   // 2. Get trajectory
   double yaw0;

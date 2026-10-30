@@ -30,6 +30,8 @@ sp_vision_25rbclone
 |   ├── rb_auto_aim_debug_async.cpp     // aim debug（异步版）
 |   ├── rb_auto_aim_debug_fft.cpp       // 带FFT（前哨站等周期运动）的aim debug
 |   ├── rb_auto_aim_simulator.cpp       // ROS2仿真输入的自瞄程序（尚未接入CMake，见文末说明）
+|   ├── rm_aim_sim_client.cpp           // rm_aim_sim 共享内存仿真接入（见 docs/rm_aim_sim.md）
+|   ├── rm_aim_sim_rune_client.cpp      // rm_aim_sim 能量机关（打符）接入
 |   ├── rb_auto_standard.cpp            // 步兵上场程序
 |   ├── rb_auto_standard_async.cpp      // 步兵上场程序（异步版）
 |   ├── rb_auto_standard_debug.cpp      // 步兵上场程序debug
@@ -111,6 +113,53 @@ sp_vision_25rbclone
     ├── uv_overlay.hpp             // UV观测可视化叠加
     └── yaml.hpp                   // YAML配置文件解析器
 ```
+
+## rm_aim_sim 本机仿真接入
+
+`src/rm_aim_sim_client.cpp` 通过 `/dev/shm/rm_aim_sim_<channel>/` 直接接入
+[rm_aim_sim](https://github.com/ForgetWW520/rm_aim_sim)，复用本仓库的
+YOLO/传统检测、Solver、Tracker 和 Planner，不需要 ROS。仿真提供 1440×1080 原始
+RGB 帧、同帧云台四元数和相机内外参；适配器以 100 Hz 回写 `command.json`。
+
+```bash
+# 终端一：仿真（必须图形模式）
+cd ~/Desktop/rm_aim_sim && ./run.sh -- --remote
+
+# 终端二：本仓库
+cd ~/Desktop/sp_vision_25_rbclone
+cmake --build build --target rm_aim_sim_client -j8
+cd build
+./rm_aim_sim_client ../configs/rm_aim_sim.yaml          # 只瞄准
+./rm_aim_sim_client ../configs/rm_aim_sim.yaml --fire   # 开火
+```
+
+默认用传统检测器 + 3×3 模糊，适配仿真合成外观；`--detector=yolo` 可切换到
+YOLO。完整的构建、坐标/符号、验收顺序、调参和故障排查见
+[docs/rm_aim_sim.md](docs/rm_aim_sim.md)。
+
+同一套共享内存协议也接入了能量机关（打符）：`src/rm_aim_sim_rune_client.cpp`
+用 `auto_buff::RuneSystem` 替换装甲板算法入口。**测打符请用实车对齐场景**
+`rune_real.cfg`（三维二次阻力+Magnus、枪口 0.0988 m、FOV 33.17°/fx=1813.13）：
+默认 `rune.cfg` 的水平简化弹道会让同一份算法系统性偏高 0.3–0.4 m，测出来 0 命中。
+
+```bash
+# 终端一
+cd ~/Desktop/rm_aim_sim
+./run.sh -- --remote --config=res://configs/rune_real.cfg
+# 大符换 rune_real_large.cfg
+
+# 终端二
+cd ~/Desktop/sp_vision_25_rbclone
+cmake --build build --target rm_aim_sim_rune_client -j8
+cd build
+./rm_aim_sim_rune_client ../configs/rm_aim_sim_rune_real.yaml          # 只瞄准
+./rm_aim_sim_rune_client ../configs/rm_aim_sim_rune_real.yaml --fire   # 开火
+```
+
+本机实测：小符 14/14（30 s）、40/40（60 s，37 环），同一份代码在旧水平弹道下 11 发 0 中；
+大符因首组只亮 1/5 灯臂、位姿起不来而暂不发射（1/5 灯臂的真实大符首组是已知弱区），
+详细数据和坐标/时间戳约定见
+[docs/rm_aim_sim.md 第 11 节](docs/rm_aim_sim.md#11-能量机关打符接入rm_aim_sim_rune_client)。
 
 ## PlotJuggler 数据录制和回放
 

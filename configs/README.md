@@ -179,7 +179,7 @@ RV 数字分类器额外读取一个顶层 `number_classifier` 节点（在 `her
 | `min_detect_count` | int | 必填 | 连续检测达到该帧数后，从 detecting 进入 tracking |
 | `max_temp_lost_count` | int | 必填 | 普通目标临时丢失的最大容忍帧数 |
 | `outpost_max_temp_lost_count` | int | 必填 | 前哨站目标临时丢失的最大容忍帧数 |
-| `center_accel_ff_enabled` | bool | 可选，`false` | 普通车辆是否在相邻跟踪帧之间使用整车中心 XY 加速度前馈；不作用于 MPC、弹道或旧 Aimer 外推 |
+| `center_accel_ff_enabled` | bool | 可选，`false` | 普通车辆是否在相邻跟踪帧之间使用整车中心 XY 加速度前馈；不作用于 MPC、弹道或旧 Aimer 外推。保留开关，默认关闭（当前实现在平移靶上净亏） |
 | `center_accel_window_s` | double | 可选，`0.25` | 后验整车中心位置的二次拟合时间窗口，s |
 | `center_accel_min_samples` | int | 可选，`6` | 启用加速度拟合所需的最少后验样本数，必须不小于 3 |
 | `center_accel_min_span_s` | double | 可选，`0.12` | 启用加速度拟合所需的最小样本跨度，s |

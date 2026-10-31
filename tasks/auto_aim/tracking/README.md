@@ -37,7 +37,7 @@ std::list<Armor> + timestamp -> Tracker -> std::list<Target>
 ### 状态估计器
 
 - `RVfromFYT::kf_predict()`：按整车平移、旋转和半径模型预测 11 维状态。
-- `CenterAccelerationEstimator`：对最近的 EKF 后验整车中心 XY 位置做二次拟合，结果只作为下一跟踪帧的短时预测输入；**默认关闭**，需在 YAML 里显式设置 `center_accel_ff_enabled: true`。
+- `CenterAccelerationEstimator`：对最近的 EKF 后验整车中心 XY 位置做二次拟合，结果只作为下一跟踪帧的短时预测输入；**保留开关、默认关闭**，需在 YAML 里显式设置 `center_accel_ff_enabled: true`。当前实现（0.25 s 拟合 + EMA）在平移靶上加速段有效、脉冲结束后过冲，净亏；修好估计器前不要默认开启。
 - `prepare_measurement()`：把装甲板位置转换成 `[yaw,pitch,distance,armor_yaw]` 观测。
 - `select_armor_id()`：用马氏距离选择观测对应的装甲板编号。
 - `correct()`：使用选定装甲板执行 EKF 校正。

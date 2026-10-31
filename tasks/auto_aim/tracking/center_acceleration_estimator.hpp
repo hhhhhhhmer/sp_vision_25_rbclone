@@ -12,7 +12,8 @@ namespace auto_aim
 
 struct CenterAccelerationEstimatorConfig
 {
-  // A/B 实测：默认关闭。需要时在 YAML 里显式设置 center_accel_ff_enabled: true。
+  // 保留开关，默认关闭：当前实现在平移靶上净亏（加速段有效、脉冲后过冲）。
+  // 需要时在 YAML 里显式设置 center_accel_ff_enabled: true。
   bool enabled = false;
   double window_seconds = 0.25;
   std::size_t min_samples = 6;

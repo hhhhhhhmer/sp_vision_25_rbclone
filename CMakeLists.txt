@@ -419,6 +419,14 @@ add_test(NAME thread_safe_queue_test COMMAND thread_safe_queue_test)
 add_executable(thread_pool_test tests/thread_pool_test.cpp)
 add_test(NAME thread_pool_test COMMAND thread_pool_test)
 
+# 图像—姿态时间失配 τ 的标定算法自检（纯合成数据，不需要相机/云台）
+add_executable(
+    timestamp_calib_unit_test
+    tests/timestamp_calib_unit_test.cpp
+    tools/timestamp_calib.cpp)
+target_include_directories(timestamp_calib_unit_test PRIVATE ${PROJECT_SOURCE_DIR}/tools)
+add_test(NAME timestamp_calib_unit_test COMMAND timestamp_calib_unit_test)
+
 # 绝对时刻周期调度器：节拍网格对齐、超时跳拍不连发、均值不受工作耗时影响
 add_executable(periodic_timer_test tests/periodic_timer_test.cpp)
 target_link_libraries(periodic_timer_test ${OpenCV_LIBS} fmt::fmt tools)
@@ -549,6 +557,10 @@ if(OPENVINO_MAKE)
 
     add_executable(camera_detect_test tests/camera_detect_test.cpp)
     target_link_libraries(camera_detect_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools auto_aim io)
+
+    # 时间戳自标定：相机 + 检测 + 云台，摆动几秒反解出图像与姿态的失配 τ
+    add_executable(timestamp_calib_test tests/timestamp_calib_test.cpp)
+    target_link_libraries(timestamp_calib_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 
     add_executable(omniperception_test tests/omniperception_test.cpp)
     target_link_libraries(omniperception_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim omniperception)

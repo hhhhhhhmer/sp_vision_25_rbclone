@@ -20,6 +20,8 @@
 - `pause()`、`resume()`、`is_paused()`：统一控制底层采集状态。
 - `get_last_read_t()`、`get_capturing()`、`get_camera_sn()`：查询底层相机状态。
 - `timestamp_offset`：由 YAML 的 `timestamp_offset_us` 读入并保存，`read()`/`try_read()` **不会**自动应用它。目前 `src/` 下没有程序真正拿它补偿姿态查询（`rb_binocular_aim_debug_async.cpp` 取出了该值但未使用，`rb_binocular_aim_debug.cpp` 里的补偿代码是注释掉的），实际补偿靠 `gimbal.q(t - 3ms)` 这类手写偏移。
+  正确做法是用 [`timestamp_calib_test`](../../tests/timestamp_calib_test.cpp) 标定出这个值（见 [docs/timestamp_calib.md](../../docs/timestamp_calib.md)），
+  再在调用处显式写 `gimbal.q(t - camera.timestamp_offset)`。
 - 构造时无条件读取 `img_gamma`，因此三家的配置都必须包含该键，否则启动即报错退出。
 
 ### 图像处理

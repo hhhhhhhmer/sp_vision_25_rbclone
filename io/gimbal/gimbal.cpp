@@ -50,13 +50,17 @@ Gimbal::Gimbal(const std::string & config_path)
 
   thread_ = std::thread(&Gimbal::read_thread, this);
 
-  queue_.pop();
+  {
+    std::unique_lock<std::mutex> lock(history_mutex_);
+    history_cv_.wait(lock, [this] { return !history_.empty() || quit_; });
+  }
   tools::logger()->info("[Gimbal] First q received.");
 }
 
 Gimbal::~Gimbal()
 {
   quit_ = true;
+  history_cv_.notify_all();
   if (thread_.joinable()) thread_.join();
   serial_.close();
 }
@@ -97,18 +101,63 @@ std::string Gimbal::str(GimbalMode mode) const
 
 Eigen::Quaterniond Gimbal::q(std::chrono::steady_clock::time_point t)
 {
-  while (true) {
-    auto [q_a, t_a] = queue_.pop();
-    auto [q_b, t_b] = queue_.front();
-    auto t_ab = tools::delta_time(t_a, t_b);
-    auto t_ac = tools::delta_time(t_a, t);
-    auto k = t_ac / t_ab;
-    Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
-    if (t < t_a) return q_c;
-    if (!(t_a < t && t <= t_b)) continue;
+  std::unique_lock<std::mutex> lock(history_mutex_);
+  if (history_.empty()) history_cv_.wait(lock, [this] { return !history_.empty() || quit_; });
+  if (history_.empty()) return Eigen::Quaterniond::Identity();
 
-    return q_c;
+  // 姿态流还没追到查询时刻时等一小会儿（旧实现在这里是无限等待，串口一掉线就会把视觉线程卡死）
+  if (history_.back().t < t) {
+    history_cv_.wait_for(lock, std::chrono::milliseconds(100), [this, t] {
+      return quit_ || (!history_.empty() && history_.back().t >= t);
+    });
   }
+
+  bool covered = false;
+  auto q_c = tools::slerp_lookup(history_.begin(), history_.end(), t, &covered);
+  if (!covered && history_.back().t < t) {
+    // 限频告警：查询时刻比最新反馈还新，说明串口反馈掉队，此时只能夹到最新姿态
+    static auto last_warn = std::chrono::steady_clock::time_point::min();
+    auto now = std::chrono::steady_clock::now();
+    if (tools::delta_time(now, last_warn) > 1.0) {
+      last_warn = now;
+      tools::logger()->warn(
+        "[Gimbal] q(t) lagging: query is {:.1f} ms newer than latest feedback, clamped.",
+        tools::delta_time(t, history_.back().t) * 1e3);
+    }
+  }
+  return q_c;
+}
+
+bool Gimbal::q_at(std::chrono::steady_clock::time_point t, Eigen::Quaterniond & out) const
+{
+  std::lock_guard<std::mutex> lock(history_mutex_);
+  if (history_.size() < 2) return false;
+  if (t < history_.front().t || t > history_.back().t) return false;
+
+  out = tools::slerp_lookup(history_.begin(), history_.end(), t);
+  return true;
+}
+
+std::vector<tools::TimestampedQuaternion> Gimbal::q_history() const
+{
+  std::lock_guard<std::mutex> lock(history_mutex_);
+  return std::vector<tools::TimestampedQuaternion>(history_.begin(), history_.end());
+}
+
+std::pair<std::chrono::steady_clock::time_point, std::chrono::steady_clock::time_point>
+Gimbal::q_history_span() const
+{
+  std::lock_guard<std::mutex> lock(history_mutex_);
+  if (history_.empty()) {
+    return {std::chrono::steady_clock::time_point{}, std::chrono::steady_clock::time_point{}};
+  }
+  return {history_.front().t, history_.back().t};
+}
+
+std::size_t Gimbal::q_history_size() const
+{
+  std::lock_guard<std::mutex> lock(history_mutex_);
+  return history_.size();
 }
 
 void Gimbal::sb_send(io::sb_VisionToGimbal VisionToGimbal)
@@ -298,7 +347,7 @@ void Gimbal::read_thread()
         Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) * // 绕Y轴旋转pitch
         Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());   // 绕X轴旋转roll
 
-    // 先更新线程安全状态、再入队：构造函数里的 queue_.pop() 返回时，state_/state_time_
+    // 先更新线程安全状态、再写姿态历史：构造函数在 history_ 非空时返回，此时 state_/state_time_
     // 必须已经就绪，否则首帧会出现 state_at() 时间戳仍为 0（gimbal_calib 会误判"未收到反馈"）
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -373,7 +422,18 @@ void Gimbal::read_thread()
       }
     }
 
-    queue_.push({q, t});
+    // 姿态历史（只增不删，超过时长/条数才裁掉最旧的），供 q(t)/q_at/q_history 使用
+    {
+      const std::chrono::duration<double> keep_span(kHistorySpanSeconds);
+      std::lock_guard<std::mutex> lock(history_mutex_);
+      history_.push_back({t, q});
+      while (!history_.empty() &&
+             (history_.size() > kHistoryMaxSamples ||
+              std::chrono::duration<double>(history_.back().t - history_.front().t) > keep_span)) {
+        history_.pop_front();
+      }
+    }
+    history_cv_.notify_all();
   }
 
   tools::logger()->info("[Gimbal] read_thread stopped.");
@@ -391,7 +451,10 @@ void Gimbal::reconnect()
     }
 
     if (open_serial()) {
-      queue_.clear();
+      {
+        std::lock_guard<std::mutex> lock(history_mutex_);
+        history_.clear();
+      }
       tools::logger()->info("[Gimbal] Reconnected serial successfully on {}.", serial_.getPort());
       break;
     } else {

@@ -15,4 +15,5 @@ add_library(tools OBJECT
     crc.cpp
     fft.cpp
     fps_solve.cpp
+    timestamp_calib.cpp
 )

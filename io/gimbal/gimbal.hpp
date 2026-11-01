@@ -4,6 +4,8 @@
 #include <Eigen/Geometry>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -13,7 +15,7 @@
 
 #include "serial/serial.h"
 #include "tools/logger.hpp"
-#include "tools/thread_safe_queue.hpp"
+#include "tools/quaternion_history.hpp"
 
 namespace io
 {
@@ -125,8 +127,28 @@ public:
   std::pair<GimbalState, std::chrono::steady_clock::time_point> state_at() const;
   /** @brief 将云台模式转换为字符串 @param mode 云台模式 @return 模式名称 */
   std::string str(GimbalMode mode) const;
-  /** @brief 插值得到指定时刻的云台姿态 @param t 查询时间戳 @return 姿态四元数 */
+  /** @brief 插值得到指定时刻的云台姿态 @param t 查询时间戳 @return 姿态四元数
+   *  @note 语义与旧版一致：姿态缓冲里还没有覆盖 t 的样本时会等待（最多 100ms）。
+   *        不同之处是查询不再消费姿态数据，同一时刻可以被重复查询、也可以查到过去任意时刻，
+   *        时间戳标定（tools::TimestampCalibrator）依赖这一点。 */
   Eigen::Quaterniond q(std::chrono::steady_clock::time_point t);
+
+  /** @brief 非阻塞查询指定时刻的姿态（标定/回放用）
+   *  @param t 查询时刻
+   *  @param out 输出姿态
+   *  @return 姿态历史真正覆盖该时刻时返回 true；越界时返回 false 且不写 out
+   */
+  bool q_at(std::chrono::steady_clock::time_point t, Eigen::Quaterniond & out) const;
+
+  /** @brief 拷贝一份姿态历史快照（按时间升序） */
+  std::vector<tools::TimestampedQuaternion> q_history() const;
+
+  /** @brief 姿态历史覆盖的时间范围 @return {最早时刻, 最新时刻}；无数据时返回 {0,0} */
+  std::pair<std::chrono::steady_clock::time_point, std::chrono::steady_clock::time_point>
+  q_history_span() const;
+
+  /** @brief 姿态历史中的样本数量 */
+  std::size_t q_history_size() const;
 
   /** @brief 发送自瞄控制量 @param control 是否接管控制 @param fire 是否开火 @param yaw 目标偏航角 @param yaw_vel 偏航角速度 @param yaw_acc 偏航角加速度 @param pitch 目标俯仰角 @param pitch_vel 俯仰角速度 @param pitch_acc 俯仰角加速度 */
   void send(
@@ -173,8 +195,17 @@ private:
   GimbalState state_;
   /** @brief 最近一帧反馈的接收时间（与 state_ 同一把锁保护，供 state_at 使用） */
   std::chrono::steady_clock::time_point state_time_{};
-  tools::ThreadSafeQueue<std::tuple<Eigen::Quaterniond, std::chrono::steady_clock::time_point>>
-    queue_{1000};
+
+  // 姿态历史环形缓冲：取代原先「消费式」的四元数队列。
+  // 旧实现里 q(t) 会 pop 掉已有样本，导致同一时刻不能被查询两次、也无法回看过去，
+  // 时间戳标定必须能对同一批图像按不同 τ 重放，因此改成只读的历史缓冲。
+  std::deque<tools::TimestampedQuaternion> history_;
+  mutable std::mutex history_mutex_;
+  std::condition_variable history_cv_;
+  /** @brief 姿态历史保留时长（s）；标定要回看整段采样，留够余量 */
+  static constexpr double kHistorySpanSeconds = 15.0;
+  /** @brief 姿态历史最多保留的样本数，防止高反馈频率下内存无界增长 */
+  static constexpr std::size_t kHistoryMaxSamples = 30000;
 
   int gimbal_yaw2vision, gimbal_pitch2vision, gimbal_roll2vision;
 

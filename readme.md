@@ -66,6 +66,8 @@ sp_vision_25rbclone
 │   ├── 4cmaera_test.cpp          // 四相机测试程序
 │   ├── binocular_camera_test.cpp // 双目相机测试程序
 │   ├── gimbal_test.cpp           // 云台通信测试程序
+│   ├── timestamp_calib_test.cpp  // 图像—姿态时间失配 τ 的现场自标定（摆动几秒出结果）
+│   ├── timestamp_calib_unit_test.cpp // 上述标定算法的合成数据自检
 │   ├── omniperception_test.cpp   // 全向感知测试程序
 │   ├── planner_offline_replay.cpp// 规划器离线回放
 │   ├── rbplan_smoke_test.cpp     // 规划器冒烟测试
@@ -375,12 +377,34 @@ capture            四元数采集&拍照程序
 拿一辆靶车，运行aim_debug_mpc,小陀螺转动靶车，imshow观察重投影是否正确，如果不正确需要重新拍照标定
 
 ### 6. 时间戳对齐
-由于相机快门时钟和陀螺仪时钟分别在视觉端和电控端，是两个不同的系统时钟，且相机快门时间会占据一定ms时长，所以需要对齐时间戳 \
-找到代码里的（`src/rb_auto_aim_debug.cpp` 等 debug 程序；`rb_auto_standard.cpp` 等上场程序直接取 `gimbal.q(t)`，补偿量在相机配置的 `timestamp_offset_us` 里）
-```cpp
-auto q = gimbal.q(t - 3ms);
+由于相机快门时钟和陀螺仪时钟分别在视觉端和电控端，是两个不同的系统时钟，且相机快门时间会占据一定ms时长，所以需要对齐时间戳。\
+这个失配在打靶上的误差约等于 `云台角速度 × τ`，5 m 处 **1 ms × 1 rad/s ≈ 5 mm**，所以不能靠拍脑袋定 3 ms。
+
+**首选做法：用 `timestamp_calib_test` 自标定**（详见 [docs/timestamp_calib.md](docs/timestamp_calib.md)）
+```bash
+./build/timestamp_calib_test ../configs/rb_auto_aim.yaml --auto   # 程序自己摆云台，推荐
+./build/timestamp_calib_test ../configs/rb_auto_aim.yaml          # 手动用遥控摆
 ```
-晃动云台观察静靶，观察速度和角速度直线是否跳变？如果出现跳变就更改3ms的数值，使其增大或者减小，直至晃动云台静靶的速度和角速度直线很小甚至没有，时间充裕建议单位换成us进行调整
+1. 把装甲板固定在静止位置（靶车架起来、别通电乱动），让它在画面里
+2. 自动模式：遥控切到**自瞄模式**（下位机只在自瞄模式下执行视觉角度），按空格后程序先对准装甲板、再自己绕它 ±20°/1.2Hz 摆 3 s；
+   手动模式：按空格后用遥控让云台**左右快速摆**（±20°~30°、1 Hz 左右），目标本身不要动
+3. 采样期间任意键可中止，自动模式会立刻发 `mode=0` 把云台交回遥控
+4. 程序打印 `τ ± σ`、世界系离散度从多少 cm 降到多少 cm，并给出要写的 `timestamp_offset_us`
+
+原理：静止目标在云台系下的位置 `p_g` 与姿态无关，只有 τ 取对时 `R(q(t-τ))·p_g` 才对时间保持不变；一维搜索离散度最小的 τ 即可，
+它一次性涵盖曝光、读出、传输、串口、调度的全部固定延迟，不需要知道曝光时间。云台不动时代价函数是平的，程序会直接判"激励不足"。
+
+标完之后把结果写进配置，并让姿态查询用上它：
+```yaml
+timestamp_offset_us: 7310   # 单位 us，来自 timestamp_calib_test
+```
+```cpp
+auto q = gimbal.q(t - camera.timestamp_offset);
+```
+
+**兜底做法（没有条件摆靶车时）**：改 [`src/rb_auto_aim_debug.cpp`](src/rb_auto_aim_debug.cpp) 里的 `gimbal.q(t - 3ms)`，
+晃动云台观察静靶的速度和角速度直线是否跳变，跳变就改这个 ms 数，直到静靶的速度/角速度基本不动。
+注意上场程序 `rb_auto_standard.cpp` 现在取的是 `gimbal.q(t)`（等于 τ=0），和 debug 程序差 3 ms，改的时候两边要一起改。
 
 ### 7. 调静靶偏移量
 1. 遥控开自瞄看是否锁敌，云台pid是否正常，如果不正常看一下视觉的识别帧率，再看一下电控是否埋雷

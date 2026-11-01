@@ -81,9 +81,20 @@ int main()
 
   std::printf("=== UV 端到端收敛测试（4 装甲板旋转目标，100 步 @10ms）===\n");
   for (int visible : scenarios) {
-    // 真值：[x, vx, y, vy, z, vz, yaw, vyaw, r, r_off, h]
-    Eigen::VectorXd truth = Eigen::VectorXd::Zero(11);
-    truth << 4.5, -0.8, 1.2, 0.5, 0.1, 0.0, 0.0, 1.5, 0.20, 0.05, 0.0;
+    // 真值：[x,vx,y,vy,z,vz,yaw,vyaw,r,
+    //        每板左右偏置 0..3, 每板高度偏置 0..3]
+    Eigen::VectorXd truth = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+    truth[0] = 4.5;
+    truth[1] = -0.8;
+    truth[2] = 1.2;
+    truth[3] = 0.5;
+    truth[4] = 0.1;
+    truth[7] = 1.5;
+    truth[8] = 0.20;
+    // 绝对左右 [0,0.05,0,0.05] -> 零均值相对 [-0.025,0.025,-0.025,0.025]
+    truth[RVfromFYT::kLateralOffsetIndex] = -0.025;
+    truth[RVfromFYT::kLateralOffsetIndex + 1] = 0.025;
+    truth[RVfromFYT::kLateralOffsetIndex + 2] = -0.025;
 
     // 初始状态带较大误差
     Eigen::VectorXd x0 = truth;
@@ -94,13 +105,17 @@ int main()
     x0[8] += 0.06;
     x0[7] = 0.0;
 
-    Eigen::VectorXd P0_dig = Eigen::VectorXd::Constant(11, 1.0);
+    Eigen::VectorXd P0_dig =
+      Eigen::VectorXd::Constant(RVfromFYT::kStateDimension, 1.0);
     P0_dig[1] = P0_dig[3] = P0_dig[5] = 64.0;
     P0_dig[7] = 100.0;
     // 单装甲退化保护：生产路径由 Tracker 把半径先验收紧到这个量级
     P0_dig[8] = config.radius_prior_sigma * config.radius_prior_sigma;
-    P0_dig[9] = 0;
-    P0_dig[10] = 0;
+    // 每板偏置作为已知几何，不参与估计
+    for (int i = 0; i < 3; ++i) {
+      P0_dig[RVfromFYT::kLateralOffsetIndex + i] = 0.0025;
+      P0_dig[RVfromFYT::kHeightOffsetIndex + i] = 0.0025;
+    }
     Eigen::MatrixXd P0 = P0_dig.asDiagonal();
 
     RVfromFYT filter(x0, P0, 4, ArmorName::one);

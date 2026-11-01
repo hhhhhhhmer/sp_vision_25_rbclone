@@ -176,6 +176,8 @@ RV 数字分类器额外读取一个顶层 `number_classifier` 节点（在 `her
 | 字段 | 类型 | 状态 | 作用 |
 | --- | --- | --- | --- |
 | `enemy_color` | string | 必填 | 敌方颜色；`red` 选择红方，其余值按蓝方处理。全向感知额外识别 `auto` 并从云台状态获取颜色 |
+| `armor_lateral_offsets` | double[4] | 可选，`[0,0,0,0]` | 四块装甲的切向左右偏置先验 (m)，顺序 1前/2左/3后/4右，+ 为装甲自身左侧；EKF 用零均值相对偏置，全 0 时在线估计，仅四装甲普通目标使用 |
+| `armor_height_offsets` | double[4] | 可选，`[0,0,0,0]` | 四块装甲的高度偏置先验 (m)，相对 EKF 基础高度；全 0 时在线估计，仅四装甲普通目标使用 |
 | `min_detect_count` | int | 必填 | 连续检测达到该帧数后，从 detecting 进入 tracking |
 | `max_temp_lost_count` | int | 必填 | 普通目标临时丢失的最大容忍帧数 |
 | `outpost_max_temp_lost_count` | int | 必填 | 前哨站目标临时丢失的最大容忍帧数 |

@@ -5,6 +5,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <chrono>
+#include <array>
 #include <list>
 #include <optional>
 #include <string>
@@ -119,6 +120,10 @@ private:
   double uv_radius_prior_sigma_ = -1.0;
   /** 本帧成功执行的 EKF 校正次数 */
   int last_update_count_ = 0;
+  /** 四块装甲的已知切向左右偏置 (m)，+ 为装甲自身左侧；默认 0 */
+  std::array<double, 4> armor_lateral_offsets_{0.0, 0.0, 0.0, 0.0};
+  /** 四块装甲的已知高度偏置 (m)，相对基础高度；默认 0 */
+  std::array<double, 4> armor_height_offsets_{0.0, 0.0, 0.0, 0.0};
   /** UV 观测因缺少相机几何而回退传统路径的告警是否已打印（每轮跟踪只提示一次） */
   bool uv_fallback_warned_ = false;
 

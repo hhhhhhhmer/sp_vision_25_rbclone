@@ -29,7 +29,7 @@ RVfromFYT::RVfromFYT(
 {
   if (x0.size() != kStateDimension || P0.rows() != kStateDimension ||
       P0.cols() != kStateDimension) {
-    throw std::invalid_argument("RVfromFYT requires an 11-dimensional state");
+    throw std::invalid_argument("RVfromFYT requires a 17-dimensional state");
   }
   if (armor_num_ <= 0) {
     throw std::invalid_argument("RVfromFYT requires at least one armor");
@@ -43,6 +43,33 @@ void RVfromFYT::kf_predict(double dt,
   auto v1 = noises(0);
   auto v2 = noises(1);
   this->predict_model(dt, u.head<3>(), v1, v2);
+}
+
+void RVfromFYT::set_armor_offsets(
+  const std::array<double, kMaxArmorOffsetCount> & lateral,
+  const std::array<double, kMaxArmorOffsetCount> & height)
+{
+  if (x.size() != kStateDimension) {
+    throw std::logic_error("RVfromFYT must be initialized before setting armor offsets");
+  }
+  // 零均值参数化：只存前 3 块，第 4 块由负和导出。
+  // 公共左右模式近似由 yaw/半径吸收；公共高度直接挪到 base z，保证初始板高不跳。
+  double mean_lateral = 0.0;
+  double mean_height = 0.0;
+  for (int i = 0; i < kMaxArmorOffsetCount; ++i) {
+    mean_lateral += lateral[static_cast<std::size_t>(i)];
+    mean_height += height[static_cast<std::size_t>(i)];
+  }
+  mean_lateral /= static_cast<double>(kMaxArmorOffsetCount);
+  mean_height /= static_cast<double>(kMaxArmorOffsetCount);
+
+  for (int i = 0; i < 3; ++i) {
+    x[kLateralOffsetIndex + i] = lateral[static_cast<std::size_t>(i)] - mean_lateral;
+    x[kHeightOffsetIndex + i] = height[static_cast<std::size_t>(i)] - mean_height;
+  }
+  x[12] = 0.0;  // id=3 的左右偏置由负和导出，不单独存
+  x[16] = 0.0;  // 四装甲普通目标不用这一槽（前哨站才用）
+  x[4] += mean_height;
 }
 
 
@@ -101,8 +128,14 @@ void RVfromFYT::predict_model(
        0.0,      0.0,      0.0,       // yaw
        0.0,      0.0,      0.0,       // vyaw
        0.0,      0.0,      0.0,       // radius
-       0.0,      0.0,      0.0,       // radius offset
-       0.0,      0.0,      0.0;       // height offset
+       0.0,      0.0,      0.0,       // radius offset 0
+       0.0,      0.0,      0.0,       // radius offset 1
+       0.0,      0.0,      0.0,       // radius offset 2
+       0.0,      0.0,      0.0,       // radius offset 3
+       0.0,      0.0,      0.0,       // height offset 0
+       0.0,      0.0,      0.0,       // height offset 1
+       0.0,      0.0,      0.0,       // height offset 2
+       0.0,      0.0,      0.0;       // height offset 3
 
   // 定义非线性预测函数 f(state) = F*state + B*acceleration，并对偏航角归一化
   auto f = [&](const Eigen::VectorXd & state) {
@@ -389,19 +422,51 @@ std::size_t RVfromFYT::correct_uv_batch()
 /**
  * @brief 计算指定装甲在世界坐标系中的位置
  */
+double RVfromFYT::armor_lateral_offset(
+  const Eigen::VectorXd & state, int armor_id) const
+{
+  if (armor_num_ != 4 || armor_name_ == ArmorName::outpost) return 0.0;
+  if (armor_id >= 0 && armor_id < 3) return state[kLateralOffsetIndex + armor_id];
+  if (armor_id == 3) {
+    return -(state[kLateralOffsetIndex] + state[kLateralOffsetIndex + 1] +
+             state[kLateralOffsetIndex + 2]);
+  }
+  return 0.0;
+}
+
+double RVfromFYT::armor_height_offset(
+  const Eigen::VectorXd & state, int armor_id) const
+{
+  if (armor_name_ == ArmorName::outpost) {
+    return state[16] * tower_height_multiplier(armor_id);
+  }
+  if (armor_num_ != 4) return 0.0;
+  if (armor_id >= 0 && armor_id < 3) return state[kHeightOffsetIndex + armor_id];
+  if (armor_id == 3) {
+    return -(state[kHeightOffsetIndex] + state[kHeightOffsetIndex + 1] +
+             state[kHeightOffsetIndex + 2]);
+  }
+  return 0.0;
+}
+
 Eigen::Vector3d RVfromFYT::h_armor_xyz(
   const Eigen::VectorXd & state, int armor_id) const
 {
   const double angle =
     tools::limit_rad(state[6] + armor_id * 2.0 * CV_PI / armor_num_);
-  const bool use_alternate_radius = armor_num_ == 4 && (armor_id == 1 || armor_id == 3);
-  const double radius = use_alternate_radius ? state[8] + state[9] : state[8];
+  const double radius = state[kRadiusIndex];
+  const double lateral = armor_lateral_offset(state, armor_id);
 
-  const double armor_x = state[0] - radius * std::cos(angle);
-  const double armor_y = state[2] - radius * std::sin(angle);
-  const double armor_z = armor_name_ == ArmorName::outpost
-                           ? state[4] + state[10] * tower_height_multiplier(armor_id)
-                           : state[4] + (use_alternate_radius ? state[10] : 0.0);
+  // 客户端 yaw 约定下，装甲中心 = 中心 - r*径向 + 切向*该板左右偏置。
+  // 切向取 (sin(angle), -cos(angle))，与仿真 armor_pose 的 tangent 方向一致。
+  const double tangent_x = std::sin(angle);
+  const double tangent_y = -std::cos(angle);
+
+  const double armor_x =
+    state[0] - radius * std::cos(angle) + tangent_x * lateral;
+  const double armor_y =
+    state[2] - radius * std::sin(angle) + tangent_y * lateral;
+  const double armor_z = state[4] + armor_height_offset(state, armor_id);
   return {armor_x, armor_y, armor_z};
 }
 
@@ -457,32 +522,55 @@ Eigen::Vector4d RVfromFYT::h(const Eigen::VectorXd & state, int armor_id) const
 }
 
 /**
- * @brief 观测模型的雅可比矩阵 (4x11)
+ * @brief 观测模型的雅可比矩阵 (4x17)
  */
 Eigen::Matrix<double, 4, RVfromFYT::kStateDimension> RVfromFYT::h_jacobian(
   const Eigen::VectorXd & state, int armor_id) const
 {
   const double angle =
     tools::limit_rad(state[6] + armor_id * 2.0 * CV_PI / armor_num_);
-  const bool use_alternate_radius = armor_num_ == 4 && (armor_id == 1 || armor_id == 3);
-  const double radius = use_alternate_radius ? state[8] + state[9] : state[8];
+  const bool per_armor_offsets =
+    armor_num_ == 4 && armor_name_ != ArmorName::outpost &&
+    armor_id >= 0 && armor_id < kMaxArmorOffsetCount;
+  const double radius = state[kRadiusIndex];
+  const double lateral = armor_lateral_offset(state, armor_id);
+  const double tangent_x = std::sin(angle);
+  const double tangent_y = -std::cos(angle);
 
-  const double dx_dyaw = radius * std::sin(angle);
-  const double dy_dyaw = -radius * std::cos(angle);
+  // 装甲中心 = 中心 - r*径向 + 切向*左右偏置；对 yaw 求导多出切向项。
+  const double dx_dyaw = radius * std::sin(angle) + lateral * std::cos(angle);
+  const double dy_dyaw = -radius * std::cos(angle) + lateral * std::sin(angle);
   const double dx_dr = -std::cos(angle);
   const double dy_dr = -std::sin(angle);
-  const double dx_dr_offset = use_alternate_radius ? dx_dr : 0.0;
-  const double dy_dr_offset = use_alternate_radius ? dy_dr : 0.0;
-  const double dz_dh = armor_name_ == ArmorName::outpost
-                         ? tower_height_multiplier(armor_id)
-                         : (use_alternate_radius ? 1.0 : 0.0);
 
   // 状态到装甲坐标 [x,y,z,yaw] 的雅可比
-  Eigen::Matrix<double, 4, kStateDimension> H_xyza;
-  H_xyza << 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, dx_dyaw, 0.0, dx_dr, dx_dr_offset, 0.0,   // x
-            0.0, 0.0, 1.0, 0.0, 0.0, 0.0, dy_dyaw, 0.0, dy_dr, dy_dr_offset, 0.0,   // y
-            0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,     0.0, 0.0,   0.0,          dz_dh, // z
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,     0.0, 0.0,   0.0,          0.0;   // yaw
+  Eigen::Matrix<double, 4, kStateDimension> H_xyza =
+    Eigen::Matrix<double, 4, kStateDimension>::Zero();
+  H_xyza(0, 0) = 1.0;
+  H_xyza(1, 2) = 1.0;
+  H_xyza(2, 4) = 1.0;
+  H_xyza(3, 6) = 1.0;
+  H_xyza(0, 6) = dx_dyaw;
+  H_xyza(1, 6) = dy_dyaw;
+  // 基础半径对所有板都生效；四装甲时再叠加该板自己的切向左右偏置
+  H_xyza(0, kRadiusIndex) = dx_dr;
+  H_xyza(1, kRadiusIndex) = dy_dr;
+  if (per_armor_offsets) {
+    if (armor_id < 3) {
+      H_xyza(0, kLateralOffsetIndex + armor_id) = tangent_x;
+      H_xyza(1, kLateralOffsetIndex + armor_id) = tangent_y;
+      H_xyza(2, kHeightOffsetIndex + armor_id) = 1.0;
+    } else {
+      // id=3 由前 3 块取负和，偏置雅可比为 -1
+      for (int k = 0; k < 3; ++k) {
+        H_xyza(0, kLateralOffsetIndex + k) -= tangent_x;
+        H_xyza(1, kLateralOffsetIndex + k) -= tangent_y;
+        H_xyza(2, kHeightOffsetIndex + k) -= 1.0;
+      }
+    }
+  } else if (armor_name_ == ArmorName::outpost) {
+    H_xyza(2, 16) = tower_height_multiplier(armor_id);
+  }
 
   // 装甲坐标到观测 [yaw,pitch,distance,armor_yaw] 的雅可比
   const Eigen::Matrix3d H_ypd = tools::xyz2ypd_jacobian(h_armor_xyz(state, armor_id));

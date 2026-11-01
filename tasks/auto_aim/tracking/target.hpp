@@ -130,6 +130,10 @@ public:
   /** @brief 根据状态计算指定编号装甲板的位置 @param x 目标状态 @param id 装甲板编号 @return 装甲板世界坐标 */
   Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;
 
+  /** @brief 设置四块装甲板的已知左右/高度偏置 @param lateral 切向左右偏置 (m) @param height 高度偏置 (m) */
+  void set_armor_offsets(
+    const std::array<double, 4> & lateral, const std::array<double, 4> & height);
+
   /** @brief 判断滤波器是否发散 @return 发散时返回 true */
   bool diverged() const;
 

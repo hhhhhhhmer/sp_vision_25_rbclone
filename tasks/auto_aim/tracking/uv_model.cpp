@@ -89,16 +89,34 @@ Eigen::Matrix3d UvModel::armor_rotation(const Eigen::VectorXd & state, int armor
 Eigen::Vector3d UvModel::armor_position(const Eigen::VectorXd & state, int armor_id) const
 {
   const double angle = armor_yaw(state, armor_id);
-  const bool use_alternate_radius = armor_num_ == 4 && (armor_id == 1 || armor_id == 3);
-  const double radius = use_alternate_radius ? state[8] + state[9] : state[8];
+  const bool per_armor_offsets =
+    armor_num_ == 4 && armor_name_ != ArmorName::outpost &&
+    armor_id >= 0 && armor_id < 4;
+  const double radius = state[8];
+  double lateral = 0.0;
+  if (per_armor_offsets) {
+    if (armor_id < 3) {
+      lateral = state[9 + armor_id];
+    } else {
+      lateral = -(state[9] + state[10] + state[11]);
+    }
+  }
 
-  const double height_offset =
-    armor_name_ == ArmorName::outpost
-      ? state[10] * tower_height_multiplier(armor_id)
-      : (use_alternate_radius ? state[10] : 0.0);
+  double height_offset = 0.0;
+  if (armor_name_ == ArmorName::outpost) {
+    height_offset = state[16] * tower_height_multiplier(armor_id);
+  } else if (per_armor_offsets) {
+    if (armor_id < 3) {
+      height_offset = state[13 + armor_id];
+    } else {
+      height_offset = -(state[13] + state[14] + state[15]);
+    }
+  }
 
+  // 与 RVfromFYT::h_armor_xyz 完全一致：切向 (sin,-cos)，+ 为装甲自身左侧
   return Eigen::Vector3d(
-    state[0] - radius * std::cos(angle), state[2] - radius * std::sin(angle),
+    state[0] - radius * std::cos(angle) + std::sin(angle) * lateral,
+    state[2] - radius * std::sin(angle) - std::cos(angle) * lateral,
     state[4] + height_offset);
 }
 
@@ -187,33 +205,55 @@ bool UvModel::project_point(
   return true;
 }
 
-Eigen::Matrix<double, 3, 11> UvModel::corner_world_jacobian(
+Eigen::Matrix<double, 3, UvModel::kStateDim> UvModel::corner_world_jacobian(
   const Eigen::VectorXd & state, int armor_id, const Eigen::Vector3d & local, ArmorType) const
 {
-  Eigen::Matrix<double, 3, 11> J = Eigen::Matrix<double, 3, 11>::Zero();
+  Eigen::Matrix<double, 3, kStateDim> J = Eigen::Matrix<double, 3, kStateDim>::Zero();
 
   const double angle = armor_yaw(state, armor_id);
-  const bool use_alternate_radius = armor_num_ == 4 && (armor_id == 1 || armor_id == 3);
-  const double radius = use_alternate_radius ? state[8] + state[9] : state[8];
-  const double height_multiplier = armor_name_ == ArmorName::outpost
-                                     ? tower_height_multiplier(armor_id)
-                                     : (use_alternate_radius ? 1.0 : 0.0);
+  const bool per_armor_offsets =
+    armor_num_ == 4 && armor_name_ != ArmorName::outpost &&
+    armor_id >= 0 && armor_id < 4;
+  const double radius = state[8];
+  double lateral = 0.0;
+  if (per_armor_offsets) {
+    if (armor_id < 3) {
+      lateral = state[9 + armor_id];
+    } else {
+      lateral = -(state[9] + state[10] + state[11]);
+    }
+  }
 
   // 中心位置
   J(0, 0) = 1.0;
   J(1, 2) = 1.0;
   J(2, 4) = 1.0;
 
-  // 半径方向
+  // 半径方向；四装甲再叠加该板自己的切向左右偏置（id=3 取负和）
   const Eigen::Vector3d d_radius(-std::cos(angle), -std::sin(angle), 0.0);
   J.col(8) += d_radius;
-  if (use_alternate_radius) J.col(9) += d_radius;
+  if (per_armor_offsets) {
+    const double tx = std::sin(angle);
+    const double ty = -std::cos(angle);
+    if (armor_id < 3) {
+      J(0, 9 + armor_id) += tx;
+      J(1, 9 + armor_id) += ty;
+      J(2, 13 + armor_id) = 1.0;
+    } else {
+      for (int k = 0; k < 3; ++k) {
+        J(0, 9 + k) -= tx;
+        J(1, 9 + k) -= ty;
+        J(2, 13 + k) -= 1.0;
+      }
+    }
+  } else if (armor_name_ == ArmorName::outpost) {
+    J(2, 16) = tower_height_multiplier(armor_id);
+  }
 
-  // 高度偏移
-  J(2, 10) = height_multiplier;
-
-  // 偏航角：圆心绕转的导数 + 姿态旋转的导数
-  const Eigen::Vector3d d_center(radius * std::sin(angle), -radius * std::cos(angle), 0.0);
+  // 偏航角：圆心绕转的导数（含切向偏置项）+ 姿态旋转的导数
+  const Eigen::Vector3d d_center(
+    radius * std::sin(angle) + lateral * std::cos(angle),
+    -radius * std::cos(angle) + lateral * std::sin(angle), 0.0);
   const double pitch = armor_pitch();
   const double cy = std::cos(angle), sy = std::sin(angle);
   const double cp = std::cos(pitch), sp = std::sin(pitch);
@@ -310,15 +350,15 @@ UvModel::Jacobian UvModel::jacobian(
   const Eigen::Matrix3d R = armor_rotation(state, armor_id);
   const Eigen::Vector3d center = armor_position(state, armor_id);
 
-  // 每个角点的 2x11 像素雅可比
-  Eigen::Matrix<double, 2, 11> J_corner[4];
+  // 每个角点的 2x17 像素雅可比
+  Eigen::Matrix<double, 2, kStateDim> J_corner[4];
   Eigen::Vector2d pixel[4];
   for (int i = 0; i < 4; i++) {
     const Eigen::Vector3d point_world = center + R * local[i];
     Eigen::Matrix<double, 2, 3> J_proj;
     if (!project_point(world_to_camera(point_world), pixel[i], J_proj)) return Jacobian::Zero();
 
-    const Eigen::Matrix<double, 3, 11> J_world =
+    const Eigen::Matrix<double, 3, kStateDim> J_world =
       corner_world_jacobian(state, armor_id, local[i], type);
     // 世界 -> 相机：P_cam = R_cg^T (R_gw^T P - t_cg)
     const Eigen::Matrix3d R_world2camera = geometry_.R_camera2gimbal.transpose() *
@@ -329,9 +369,9 @@ UvModel::Jacobian UvModel::jacobian(
   const Eigen::Matrix<double, 4, 4> J_left = uvl_jacobian_from_corners(pixel[0], pixel[3]);
   const Eigen::Matrix<double, 4, 4> J_right = uvl_jacobian_from_corners(pixel[1], pixel[2]);
 
-  Eigen::Matrix<double, 4, 11> corners_left;
+  Eigen::Matrix<double, 4, kStateDim> corners_left;
   corners_left << J_corner[0], J_corner[3];  // (A.x,A.y,B.x,B.y)
-  Eigen::Matrix<double, 4, 11> corners_right;
+  Eigen::Matrix<double, 4, kStateDim> corners_right;
   corners_right << J_corner[1], J_corner[2];
 
   H.topRows<4>() = J_left * corners_left;

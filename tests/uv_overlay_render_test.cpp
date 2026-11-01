@@ -52,8 +52,15 @@ CameraGeometry make_geometry()
 /** @brief 真值状态（与 uv_filter_test 同参数）：x=3.2 y=1.1 z=0.15 yaw=0.42 r=0.2 */
 Eigen::VectorXd make_truth()
 {
-  Eigen::VectorXd x = Eigen::VectorXd::Zero(11);
-  x << 3.2, 0.4, 1.1, -0.3, 0.15, 0.0, 0.42, 1.8, 0.20, 0.06, 0.02;
+  Eigen::VectorXd x = Eigen::VectorXd::Zero(auto_aim::RVfromFYT::kStateDimension);
+  x[0] = 3.2;
+  x[1] = 0.4;
+  x[2] = 1.1;
+  x[3] = -0.3;
+  x[4] = 0.15;
+  x[6] = 0.42;
+  x[7] = 1.8;
+  x[8] = 0.20;
   return x;
 }
 
@@ -151,15 +158,22 @@ int main()
   armor.points[2].x += 1.5F;
 
   // 目标：以"已解算"的观测初始化（世界系 x=3.2 y=1.1 z=0.15，r=0.2，4 块板）
-  Eigen::VectorXd x0 = Eigen::VectorXd::Zero(11);
-  x0 << 3.2, 0.4, 1.1, -0.3, 0.15, 0.0, 0.42, 1.8, 0.20, 0.06, 0.02;
+  Eigen::VectorXd x0 = Eigen::VectorXd::Zero(auto_aim::RVfromFYT::kStateDimension);
+  x0[0] = 3.2;
+  x0[1] = 0.4;
+  x0[2] = 1.1;
+  x0[3] = -0.3;
+  x0[4] = 0.15;
+  x0[6] = 0.42;
+  x0[7] = 1.8;
+  x0[8] = 0.20;
 
   Armor seed = armor;
   seed.xyz_in_world = model.armor_position(x0, armor_id);
   seed.ypr_in_world = Eigen::Vector3d(model.armor_yaw(x0, armor_id), 0.0, 0.0);
   seed.ypd_in_world = Eigen::Vector3d(3.2, 1.1, 1.8);
 
-  Eigen::VectorXd P0_dig = Eigen::VectorXd::Ones(11) * 0.1;
+  Eigen::VectorXd P0_dig = Eigen::VectorXd::Ones(RVfromFYT::kStateDimension) * 0.1;
   Target target(seed, std::chrono::steady_clock::now(), x0[8], 4, P0_dig);
   target.set_uv_config(config);
   target.set_camera_geometry(geometry);

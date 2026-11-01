@@ -58,6 +58,17 @@ CenterAccelerationEstimatorConfig read_center_acceleration_config(const YAML::No
     optional_value(yaml, "center_accel_stale_timeout_s", config.stale_timeout_seconds);
   return config;
 }
+
+std::array<double, 4> read_armor_offsets(const YAML::Node & yaml, const char * key)
+{
+  std::array<double, 4> offsets{0.0, 0.0, 0.0, 0.0};
+  const YAML::Node node = yaml[key];
+  if (!node || !node.IsSequence()) return offsets;
+  for (std::size_t i = 0; i < offsets.size() && i < node.size(); ++i) {
+    offsets[i] = node[i].as<double>();
+  }
+  return offsets;
+}
 }  // namespace
 
 Tracker::Tracker(const std::string & config_path, Solver * solver)
@@ -95,6 +106,8 @@ Tracker::Tracker(const std::string & config_path, IArmorPoseSolver * solver)
   meas_distance_sigma_ = optional_value(yaml, "meas_distance_sigma", -1.0);
   meas_angle_sigma_ = optional_value(yaml, "meas_angle_sigma", -1.0);
   load_uv_config(yaml);
+  armor_lateral_offsets_ = read_armor_offsets(yaml, "armor_lateral_offsets");
+  armor_height_offsets_ = read_armor_offsets(yaml, "armor_height_offsets");
 
   last_cam_is_short = true;
 }
@@ -607,22 +620,37 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 
   double radius = 0.2;
   int armor_num = 4;
-  Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
+  // 17 维：[x,vx,y,vy,z,vz,yaw,vyaw,r,
+  //         板0..3 左右偏置, 板0..3 高度偏置]
+  // 零均值偏置的自由度只有 3+3 个相对模式；P0 给 sigma=5 cm，
+  // 允许从 0 起学习任意非对称布局（symmetric -> 收敛到 0），
+  // 而公共左右/高度模式由 yaw/半径/中心吸收，不会沿不可观测方向漂。
+  constexpr double kArmorOffsetPriorVar = 0.0025;  // sigma = 5 cm
+  Eigen::VectorXd P0_dig = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+  P0_dig << 1, 64, 1, 64, 1, 64, 0.4, 100, 1,
+    kArmorOffsetPriorVar, kArmorOffsetPriorVar, kArmorOffsetPriorVar, 0.0,
+    kArmorOffsetPriorVar, kArmorOffsetPriorVar, kArmorOffsetPriorVar, 0.0;
 
   if (is_balance) {
-    P0_dig << 1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1;
+    P0_dig = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+    P0_dig << 1, 64, 1, 64, 1, 64, 0.4, 100, 1, 0, 0, 0, 0, 0, 0, 0, 0;
     radius = 0.2;
     armor_num = 2;
   }
 
   else if (armor.name == ArmorName::outpost) {
-    P0_dig << 1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0;
+    P0_dig = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+    // 前哨站：只有 [16] 高度阶梯有意义；其余每板偏置不参与
+    P0_dig << 1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4,
+      0, 0, 0, 0, 0, 0, 0, 1e-4;
     radius = 0.2765;
     armor_num = 3;
   }
 
   else if (armor.name == ArmorName::base) {
-    P0_dig << 1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0;
+    P0_dig = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+    P0_dig << 1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4,
+      0, 0, 0, 0, 0, 0, 0, 0;
     radius = 0.3205;
     armor_num = 3;
   }
@@ -633,6 +661,11 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   }
 
   target_ = Target(armor, t, radius, armor_num, P0_dig);
+  // 四装甲普通目标：把每块板的已知左右/高度偏置写入 EKF 几何。
+  // 前哨站/三装甲/两装甲不使用每板偏置。
+  if (armor_num == 4 && armor.name != ArmorName::outpost) {
+    target_.set_armor_offsets(armor_lateral_offsets_, armor_height_offsets_);
+  }
 
   target_.cam_is_short = cam_is_short;
   last_cam_is_short = cam_is_short;

@@ -173,7 +173,7 @@ int main(int argc, char * argv[])
       data["w"] = x[7];
       data["r"] = x[8];
       data["l"] = x[9];
-      data["h"] = x[10];
+      data["h"] = x[13];
       data["last_id"] = target.last_id;
 
       // 卡方检验数据

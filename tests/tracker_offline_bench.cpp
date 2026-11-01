@@ -170,7 +170,8 @@ int main(int argc, char * argv[])
     double reproj_best_px = -1, reproj_mean_px = -1, reproj_self_px = -1;
     int last_id = -1, armor_num = 0;
     double nis = -1;
-    Eigen::VectorXd ekf_x = Eigen::VectorXd::Zero(11);
+    Eigen::VectorXd ekf_x =
+      Eigen::VectorXd::Zero(auto_aim::RVfromFYT::kStateDimension);
 
     if (has_target) {
       const auto & target = targets.front();

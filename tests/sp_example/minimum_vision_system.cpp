@@ -113,7 +113,7 @@ int main(int argc, char * argv[])
       data["w"] = x[7];
       data["r"] = x[8];
       data["l"] = x[9];
-      data["h"] = x[10];
+      data["h"] = x[13];
       data["last_id"] = target.last_id;
       data["distance"] = std::sqrt(x[0] * x[0] + x[2] * x[2] + x[4] * x[4]);
 

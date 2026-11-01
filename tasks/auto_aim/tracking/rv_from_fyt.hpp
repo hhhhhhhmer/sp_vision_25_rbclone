@@ -15,24 +15,40 @@ namespace auto_aim
 /**
  * @brief 基于"半径-速度"运动模型的扩展卡尔曼滤波器，用于装甲板状态估计。
  *
- * 状态向量： [x, vx, y, vy, z, vz, yaw, vyaw, radius, radius_offset, height_offset]
+ * 状态向量： [x, vx, y, vy, z, vz, yaw, vyaw, radius,
+ *            lateral_offset0..2, height_offset0..2（零均值相对偏置）]
  * 测量向量：
  *  - 传统模式：[yaw, pitch, distance, armor_yaw]（世界系，需要逐帧 PnP）
  *  - UV 模式：每条可见装甲板 8 维 UVL（像素系，直接由检测角点构造，无需 PnP）
+ *
+ * 四装甲目标（非前哨站）的每块板使用独立的左右/高度偏置：
+ *   radius_i = x[8] + x[9 + i]
+ *   z_i      = x[4] + x[13 + i]
+ * 三装甲/两装甲目标保持原行为：radius = x[8]，z = x[4]；
+ * 前哨站的高度阶梯使用 x[16]（乘 tower_height_multiplier）。
+ * 第 4 块板的左右/高度偏置由前 3 块取负和得到，保证四块偏置零均值：
+ *   lateral_3 = -(lateral_0+lateral_1+lateral_2)
+ *   height_3  = -(height_0+height_1+height_2)
+ * 这样公共左右/高度模式由 yaw/半径/中心吸收，不会成为不可观测的漂移方向。
  */
 class RVfromFYT : public State2Est
 {
 public:
-  static constexpr Eigen::Index kStateDimension = 11;   ///< 状态维度
+  static constexpr Eigen::Index kStateDimension = 17;   ///< 状态维度
+  static constexpr Eigen::Index kRadiusIndex = 8;        ///< 基础半径
+  static constexpr Eigen::Index kLateralOffsetIndex = 9;  ///< 4 块板的左右偏置起始下标
+  static constexpr Eigen::Index kHeightOffsetIndex = 13; ///< 4 块板的高度偏置起始下标
+  static constexpr Eigen::Index kMaxArmorOffsetCount = 4;///< 每板偏置最多 4 块
   static constexpr double kTowerArmorHeightStep = 0.10; ///< 前哨站装甲板高低差
+  static_assert(UvModel::kStateDim == kStateDimension, "UvModel state dimension must match RVfromFYT");
 
   /** @brief 默认构造未初始化的估计器 */
   RVfromFYT() = default;
 
   /**
    * @brief 带参构造函数
-   * @param x0 初始状态向量 (11维)
-   * @param P0 初始协方差矩阵 (11x11)
+   * @param x0 初始状态向量 (17维)
+   * @param P0 初始协方差矩阵 (17x17)
    * @param armor_num 装甲板数量 (例如 3 或 4)
    * @param armor_name 装甲类型 (如 outpost, sentry, etc.)
    * @throws std::invalid_argument 如果维度不匹配或 armor_num <= 0
@@ -43,6 +59,17 @@ public:
 
   /** @brief 按半径-速度模型执行 EKF 预测 @param dt 时间步长，单位 s @param u 三轴加速度输入 @param noises 过程噪声参数 */
   void kf_predict(double dt, const Eigen::VectorXd & u, const Eigen::VectorXd noises);
+
+  /**
+   * @brief 设置四块装甲板的已知左右/高度偏置
+   * @param lateral 沿每块板自身切向的左右偏置 (m)，+ 为装甲自身左侧
+   * @param height 每块板相对基础高度的高度偏置 (m)
+   * @note 四装甲普通目标使用；三/两装甲与前哨站忽略。偏置默认作为已知几何
+   *       （P0 对应项为 0），需要在线估计时由调用方给非零先验。
+   */
+  void set_armor_offsets(
+    const std::array<double, kMaxArmorOffsetCount> & lateral,
+    const std::array<double, kMaxArmorOffsetCount> & height);
 
   // ---------------------------------------------------------------- UV 观测模式
 
@@ -154,7 +181,7 @@ public:
   /**
    * @brief 执行校正步骤（更新状态）
    * @param armor_id 选中的装甲板ID
-   * @return 更新后的状态向量 (11维)
+   * @return 更新后的状态向量 (17维)
    * @throws std::logic_error 如果未调用 prepare_measurement
    */
   Eigen::VectorXd correct(int armor_id);
@@ -247,10 +274,16 @@ private:
    * @brief 观测模型的雅可比矩阵 ∂h/∂state
    * @param state 状态向量
    * @param armor_id 装甲ID
-   * @return 4x11 雅可比矩阵
+   * @return 4x17 雅可比矩阵
    */
   Eigen::Matrix<double, 4, kStateDimension> h_jacobian(
     const Eigen::VectorXd & state, int armor_id) const;
+
+  /** @brief 该板的切向左右偏置（零均值参数化，id=3 由前 3 块取负和） */
+  double armor_lateral_offset(const Eigen::VectorXd & state, int armor_id) const;
+
+  /** @brief 该板的高度偏置（零均值参数化；前哨站返回高度阶梯乘数） */
+  double armor_height_offset(const Eigen::VectorXd & state, int armor_id) const;
 
   /**
    * @brief 计算塔装甲高度乘数 (仅用于outpost)

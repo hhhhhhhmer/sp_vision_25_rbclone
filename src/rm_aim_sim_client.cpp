@@ -1030,12 +1030,16 @@ int run(const Options & options)
               std::string target_desc = "none";
               if (target_fresh) {
                 const auto x = snapshot.target->ekf_x();
+                auto at = [&](int index) { return x.size() > index ? x[index] : 0.0; };
                 target_desc = fmt::format(
-                  "({:.2f},{:.2f},{:.2f}) yaw={:.1f}° vyaw={:.1f}°/s r={:.3f} alt_r={:+.3f} "
-                  "alt_h={:+.3f} ref={:+.2f}° aim_id={} hz_aim=({:.2f},{:.2f},{:.2f})",
-                  x[0], x[2], x[4], x[6] * 180.0 / CV_PI, x[7] * 180.0 / CV_PI,
-                  x.size() > 8 ? x[8] : 0.0, x.size() > 9 ? x[9] : 0.0,
-                  x.size() > 10 ? x[10] : 0.0, -plan.target_pitch * 180.0 / CV_PI,
+                  "({:.2f},{:.2f},{:.2f}) yaw={:.1f}° vyaw={:.1f}°/s r={:.3f} "
+                  "off_lat=({:+.3f},{:+.3f},{:+.3f},{:+.3f}) "
+                  "off_h=({:+.3f},{:+.3f},{:+.3f},{:+.3f}) "
+                  "ref={:+.2f}° aim_id={} hz_aim=({:.2f},{:.2f},{:.2f})",
+                  at(0), at(2), at(4), at(6) * 180.0 / CV_PI, at(7) * 180.0 / CV_PI,
+                  at(8), at(9), at(10), at(11), -(at(9) + at(10) + at(11)),
+                  at(13), at(14), at(15), -(at(13) + at(14) + at(15)),
+                  -plan.target_pitch * 180.0 / CV_PI,
                   planner.aim_armor_id(), planner.debug_xyza[0], planner.debug_xyza[1],
                   planner.debug_xyza[2]);
               }

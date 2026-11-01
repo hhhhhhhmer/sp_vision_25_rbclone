@@ -36,7 +36,8 @@ std::list<Armor> + timestamp -> Tracker -> std::list<Target>
 
 ### 状态估计器
 
-- `RVfromFYT::kf_predict()`：按整车平移、旋转和半径模型预测 11 维状态。
+- `RVfromFYT::kf_predict()`：按整车平移、旋转和半径模型预测 17 维状态：`[x,vx,y,vy,z,vz,yaw,vyaw,r, lat_off0..3, h_off0..3]`。四装甲普通目标每块板使用独立的左右 + 高度偏置；三/两装甲只用基础半径/高度，前哨站把 `[13]` 当高度阶梯。
+- 每板偏置用**零均值相对参数化**：只估计前 3 块的左右/高度，第 4 块由负和导出，公共模式由 yaw/半径/中心吸收；P0=σ²=0.05² 允许从 0 在线学习任意非对称布局，对称布局会收敛到 0。YAML 的 `armor_lateral_offsets` / `armor_height_offsets` 是可选先验（顺序前/左/后/右，切向 + 为自身左侧），不填/全 0 也能收敛。`select_aim_armor()` / `aim_armor_xyzad()` 使用选中板自己的偏置。
 - `CenterAccelerationEstimator`：对最近的 EKF 后验整车中心 XY 位置做二次拟合，结果只作为下一跟踪帧的短时预测输入；**保留开关、默认关闭**，需在 YAML 里显式设置 `center_accel_ff_enabled: true`。当前实现（0.25 s 拟合 + EMA）在平移靶上加速段有效、脉冲结束后过冲，净亏；修好估计器前不要默认开启。
 - `prepare_measurement()`：把装甲板位置转换成 `[yaw,pitch,distance,armor_yaw]` 观测。
 - `select_armor_id()`：用马氏距离选择观测对应的装甲板编号。
@@ -54,7 +55,7 @@ std::list<Armor> + timestamp -> Tracker -> std::list<Target>
 
 - `UvModel::observation(points)`：把装甲板 4 个角点转成 8 维 UVL 观测——
   左/右灯条各 `(角度, 中心x, 中心y, 长度)`；角度用 `atan2(dx,-dy)`，竖直灯条为 0，绕开了 `atan2(dx,dy)` 在 ±π 处的回绕。
-- `predict(state, armor_id, type)` / `jacobian(state, armor_id, type)`：由 EKF 状态投影出观测及其 8x11 雅可比。
+- `predict(state, armor_id, type)` / `jacobian(state, armor_id, type)`：由 EKF 状态投影出观测及其 8x17 雅可比。
 - `noise(state, armor_id, type, z)`：中心像素噪声按姿态误差给大值，长度噪声按端点检测噪声给小值，各向异性由参数天然表达；`attitude_common_ratio` 控制姿态误差里"整帧共模"与"各灯条独立"的比例。
 - `associate_gate_px`、`facing_cos_min`：灯条中心像素距离的关联门限，以及装甲板法线与视线夹角余弦的可见性判据。
 - `radius_prior_sigma`、`process_noise_z_scale`：单装甲退化时的半径先验，以及深度方向的过程噪声缩放。

@@ -164,7 +164,9 @@ OutpostRun run_outpost(const UvConfig & cfg, const CameraGeometry & geometry, bo
   first.xyz_in_world = plate_pos(yaw, 0);
   first.ypr_in_world = Eigen::Vector3d(yaw, kPitch, 0.0);
 
-  Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}};
+  Eigen::VectorXd P0_dig = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+  P0_dig << 1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4,
+    0, 0, 0, 0, 0, 0, 0, 0;
   if (uv) P0_dig[8] = cfg.radius_prior_sigma * cfg.radius_prior_sigma;  // Tracker 的退化保护
 
   Target target(first, t0, kRadius, kPlateNum, P0_dig);
@@ -233,8 +235,13 @@ int main()
 
   std::printf("=== A1: 观测模型与状态读回的高度阶梯一致性 ===\n");
   {
-    Eigen::VectorXd x = Eigen::VectorXd::Zero(11);
-    x << 3.0, 0, 0.5, 0, 1.0, 0, 0.0, 0, 0.2765, 0, 0.10;  // 前哨站：armor_num=3
+    Eigen::VectorXd x = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+    // 前哨站：armor_num=3，[13] 是高度阶梯
+    x[0] = 3.0;
+    x[2] = 0.5;
+    x[4] = 1.0;
+    x[8] = 0.2765;
+    x[16] = 0.10;  // 前哨站高度阶梯
 
     const Heights cases[3] = {
       {std::make_pair(false, 0.0), std::make_pair(false, 0.0), std::make_pair(false, 0.0)},
@@ -242,7 +249,9 @@ int main()
       {std::make_pair(true, 1.0), std::make_pair(true, 1.1), std::make_pair(true, 1.2)}};
     const char * case_name[3] = {"锚点全无效", "只有 0 号锚点有效", "三块锚点都有效"};
 
-    RVfromFYT ekf(x, Eigen::MatrixXd::Identity(11, 11), kPlateNum, ArmorName::outpost);
+    RVfromFYT ekf(
+      x, Eigen::MatrixXd::Identity(RVfromFYT::kStateDimension, RVfromFYT::kStateDimension),
+      kPlateNum, ArmorName::outpost);
     UvModel uv;
     uv.configure(cfg, kPlateNum, ArmorName::outpost);
 
@@ -322,7 +331,9 @@ int main()
     init.ypr_in_world = Eigen::Vector3d(yaw0, 15.0 * M_PI / 180.0, 0.0);
 
     const auto t0 = std::chrono::steady_clock::now();
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0}};
+    Eigen::VectorXd P0_dig = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+    P0_dig << 1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4,
+      0, 0, 0, 0, 0, 0, 0, 0;
     Target target(init, t0, radius, 4, P0_dig);
     target.set_uv_config(cfg);
     target.set_camera_geometry(geometry);

@@ -10,6 +10,7 @@
 #include <opencv2/opencv.hpp>
 #include <vector>
 
+#include "tasks/auto_aim/tracking/rv_from_fyt.hpp"
 #include "tasks/auto_aim/tracking/uv_model.hpp"
 
 using namespace auto_aim;
@@ -49,13 +50,16 @@ std::vector<cv::Point2f> reference_project(
 {
   const int armor_num = 4;
   const double theta = state[6] + armor_id * 2.0 * M_PI / armor_num;
-  const bool alt = (armor_id == 1 || armor_id == 3);
-  const double radius = alt ? state[8] + state[9] : state[8];
-  const double height_offset = alt ? state[10] : 0.0;
+  const double radius = state[8];
+  const double lateral = armor_id < 3 ? state[9 + armor_id]
+                                      : -(state[9] + state[10] + state[11]);
+  const double height_offset = armor_id < 3 ? state[13 + armor_id]
+                                            : -(state[13] + state[14] + state[15]);
   const double pitch = 15.0 * M_PI / 180.0;
 
   const Eigen::Vector3d armor_center(
-    state[0] - radius * std::cos(theta), state[2] - radius * std::sin(theta),
+    state[0] - radius * std::cos(theta) + std::sin(theta) * lateral,
+    state[2] - radius * std::sin(theta) - std::cos(theta) * lateral,
     state[4] + height_offset);
   const Eigen::Matrix3d R_armor2world = Rz(theta) * Ry(pitch);
 
@@ -107,9 +111,24 @@ CameraGeometry make_geometry()
 
 Eigen::VectorXd make_state()
 {
-  Eigen::VectorXd x = Eigen::VectorXd::Zero(11);
-  // [x, vx, y, vy, z, vz, yaw, vyaw, r, r_off, h]
-  x << 3.2, 0.4, 1.1, -0.3, 0.15, 0.0, 0.42, 1.8, 0.20, 0.06, 0.02;
+  Eigen::VectorXd x = Eigen::VectorXd::Zero(auto_aim::RVfromFYT::kStateDimension);
+  // [x, vx, y, vy, z, vz, yaw, vyaw, r,
+  //  每板左右偏置 0..3, 每板高度偏置 0..3]
+  x[0] = 3.2;
+  x[1] = 0.4;
+  x[2] = 1.1;
+  x[3] = -0.3;
+  x[4] = 0.15;
+  x[6] = 0.42;
+  x[7] = 1.8;
+  x[8] = 0.20;
+  // 绝对左右 [0,0.06,0,0.06] / 高度 [0,0.02,0,0.02] 的零均值相对量
+  x[auto_aim::RVfromFYT::kLateralOffsetIndex] = -0.03;
+  x[auto_aim::RVfromFYT::kLateralOffsetIndex + 1] = 0.03;
+  x[auto_aim::RVfromFYT::kLateralOffsetIndex + 2] = -0.03;
+  x[auto_aim::RVfromFYT::kHeightOffsetIndex] = -0.01;
+  x[auto_aim::RVfromFYT::kHeightOffsetIndex + 1] = 0.01;
+  x[auto_aim::RVfromFYT::kHeightOffsetIndex + 2] = -0.01;
   return x;
 }
 }  // namespace

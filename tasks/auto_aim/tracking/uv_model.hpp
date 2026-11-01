@@ -71,8 +71,10 @@ class UvModel
 public:
   /** @brief UV 观测维度（每条灯条 4 维 × 2 条灯条） */
   static constexpr int kDim = 8;
+  /** @brief EKF 状态维度（与 RVfromFYT 保持一致，由 rv_from_fyt.hpp 里的 static_assert 校验） */
+  static constexpr int kStateDim = 17;
   using Observation = Eigen::Matrix<double, kDim, 1>;
-  using Jacobian = Eigen::Matrix<double, kDim, 11>;
+  using Jacobian = Eigen::Matrix<double, kDim, kStateDim>;
   using Noise = Eigen::Matrix<double, kDim, kDim>;
 
   /** @brief 配置观测模型 @param config UV 配置 @param armor_num 装甲板数量 @param armor_name 装甲板名称（决定倾角） */
@@ -117,15 +119,15 @@ public:
 
   /**
    * @brief 预测指定装甲板的 UVL 观测
-   * @param state 11 维 EKF 状态 @param armor_id 装甲板编号 @param type 装甲板尺寸类型
+   * @param state 17 维 EKF 状态 @param armor_id 装甲板编号 @param type 装甲板尺寸类型
    * @return 8 维 UVL；投影失败（深度为负等）时返回全零
    */
   Observation predict(const Eigen::VectorXd & state, int armor_id, ArmorType type) const;
 
   /**
    * @brief 预测观测对状态的解析雅可比
-   * @param state 11 维 EKF 状态 @param armor_id 装甲板编号 @param type 装甲板尺寸类型
-   * @return 8x11 雅可比；投影失败时返回全零
+   * @param state 17 维 EKF 状态 @param armor_id 装甲板编号 @param type 装甲板尺寸类型
+   * @return 8x17 雅可比；投影失败时返回全零
    */
   Jacobian jacobian(const Eigen::VectorXd & state, int armor_id, ArmorType type) const;
 
@@ -219,8 +221,8 @@ private:
   /** @brief 装甲板角点在装甲板坐标系中的坐标 @param type 尺寸类型 @return 4 个点（顺序同 Armor::points） */
   static std::array<Eigen::Vector3d, 4> armor_corner_local(ArmorType type);
 
-  /** @brief 世界点对状态的雅可比 @param state 状态 @param armor_id 装甲板编号 @param local 装甲板系点 @param type 尺寸类型 @return 3x11 雅可比 */
-  Eigen::Matrix<double, 3, 11> corner_world_jacobian(
+  /** @brief 世界点对状态的雅可比 @param state 状态 @param armor_id 装甲板编号 @param local 装甲板系点 @param type 尺寸类型 @return 3x17 雅可比 */
+  Eigen::Matrix<double, 3, kStateDim> corner_world_jacobian(
     const Eigen::VectorXd & state, int armor_id, const Eigen::Vector3d & local,
     ArmorType type) const;
 

@@ -1,0 +1,117 @@
+# rm_aim_sim (RoboMaster Aim Lab) 接入配置
+#
+# 运行目录约定为 build/，因为下面的模型路径是相对路径 ../assets/...
+# 相机内外参以每帧 frame.json 的 camera 字段为准，本文件中的值只用于 Solver 初始化。
+# 仿真默认 target team=blue。适配程序默认关闭颜色过滤（--color-filter=false），
+# 切换红方也能跟踪；只有显式开启 --color-filter 时，这里才必须与仿真 team 一致。
+
+enemy_color: "blue"
+
+#####-----神经网络参数-----#####
+yolo_name: yolov8
+classify_model: ../assets/tiny_resnet.onnx
+yolo11_model_path: ../assets/yolo11.xml
+yolov8_model_path: ../assets/yolov8.xml
+yolov5_model_path: ../assets/yolov5.xml
+device: CPU
+min_confidence: 0.30
+
+#####-----ROI-----#####
+roi:
+  x: 0
+  y: 0
+  width: -1
+  height: -1
+
+use_roi: false
+
+#####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 20
+outpost_max_temp_lost_count: 75
+
+# 第一版接入先关闭多板融合和 UV 观测，只跑通“YOLO -> PnP -> EKF -> MPC”。
+# 静止/平移靶验证通过后，再按需打开做 A/B。
+multi_armor_fusion: true
+uv_observation: true
+uv_sigma_px: 1.0             # 灯条端点检测噪声 (px)
+uv_sigma_len_ratio: 0.02     # 与灯条像素长度成比例的附加端点噪声（尺度不变项）
+uv_sigma_attitude_deg: 0.5   # 云台/外参姿态误差 (deg)，等效像素加到灯条中心噪声
+uv_attitude_common_ratio: 0.0 # 姿态误差中整帧共模的比例：0=各灯条独立，1=完全共模
+uv_sigma_angle: 0.1          # 灯条角度噪声下限 (rad)
+uv_associate_gate_px: 60.0   # 灯条中心像素距离关联门限
+uv_facing_cos_min: 0.15      # 可见性判据（装甲板法线与视线夹角余弦下限）
+uv_radius_prior_sigma: 0.02  # 单装甲退化保护：半径先验标准差 (m)
+uv_process_noise_z_scale: 1.0 # 深度过程噪声缩放；1.0 预测误差最优，0.01~0.1 深度更平滑
+
+# 整车中心加速度前馈：保留开关，默认关闭（不删除实现）。
+# 当前实现（0.25 s 拟合 + EMA + jerk 限制）在平移靶上净亏：
+#   1.5 m/s/a=3 20 轮 OFF 61.1% vs ON 58.6%；3 m/s/a=10 OFF 57.4% vs ON 32.1%。
+# 加速段有效、脉冲结束后过冲；修好估计器前不要默认开启。
+# 需要做 A/B 时改成 true，并重新对比加速段与脉冲后巡航命中率。
+center_accel_ff_enabled: false
+
+#####-----装甲几何（每板偏置）-----#####
+# 四块装甲的已知几何偏置，顺序 1前/2左/3后/4右。
+# 切向左右偏置 (m)：+ 为装甲自身左侧；高度偏置 (m) 相对基础高度。
+# 默认对应仿真默认布局：左右 0，高度 0/-100/0/-100 mm。
+# 非对称布局（例如 2027 S121/S124 的单块左右/高度）可直接改这两个数组，
+# 选板/瞄点会使用该板自己的偏置，而不是整车的单个 alt_h/alt_r。
+armor_lateral_offsets: [0.05, -0.05, 0.017, -0.017]
+armor_height_offsets: [-0.1, 0.0, -0.066, -0.033]
+
+#####-----aimer参数-----#####
+far_pitch_offset: 0
+far_high_pitch_offset: 0
+yaw_offset: 0 # degree
+pitch_offset: 0 # degree
+comming_angle: 60 # degree
+leaving_angle: 20 # degree
+decision_speed: 8 # rad/s
+high_speed_delay_time: 0.030 # s
+low_speed_delay_time: 0.015 # s
+gimbal_delay: 0.002 # s
+shoot_offset: 2
+
+#####-----shooter参数-----#####
+first_tolerance: 3 # degree
+second_tolerance: 2 # degree
+judge_distance: 2 # m
+auto_fire: false # 是否由自瞄控制射击；适配程序默认也关闭，需显式 --fire
+
+#####-----MPC-----#####
+gimbal_control_delay: 0.04 # s 视觉->电控->云台到位延迟，仿真云端台 response_hz=6
+tower_pitch_prediction_time: 0.05
+target_dist_error: 0 # m
+target_h_error: 0 # m
+fire_thresh: 0.003
+small_armor_tolerance: 0.12 # m
+big_armor_tolerance: 0.22 # m
+tower_and_base_armor_tolerance_: 0.10 # m
+max_yaw_acc: 50
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+max_pitch_acc: 100
+Q_pitch: [9e6, 0]
+R_pitch: [1]
+
+#####-----仿真相机（每帧会被 frame.json 覆盖）-----#####
+# 默认 1440x1080，垂直 FOV 45°，零畸变；光心相对云台原点 (0.08, 0, 0.04) m。
+camera_matrix: [1303.6753236814714, 0, 720, 0, 1303.6753236814714, 540, 0, 0, 1]
+distort_coeffs: [0, 0, 0, 0, 0]
+# 适配程序用 set_R_gimbal2world_from_tf，本矩阵不参与解算，填单位阵即可。
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+# camera optical (x右/y下/z前) -> gimbal (x前/y左/z上)
+R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+t_camera2gimbal: [0.08, 0, 0.04]

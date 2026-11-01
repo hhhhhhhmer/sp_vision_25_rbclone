@@ -66,21 +66,29 @@ Target::Target(
   }
 
   // ==========================================
-  // EKF 11维状态向量定义:
-  // [0]x, [1]vx, [2]y, [3]vy, [4]z, [5]vz, 
-  // [6]yaw(偏航角), [7]vyaw(自转角速度), 
-  // [8]r(基础半径), [9]r_(半径补偿量), [10]z_(高度补偿量)
+  // EKF 17维状态向量定义:
+  // [0]x, [1]vx, [2]y, [3]vy, [4]z, [5]vz,
+  // [6]yaw(偏航角), [7]vyaw(自转角速度), [8]r(基础半径),
+  // [9..12]每块板的左右偏置, [13..16]每块板的高度偏置
+  // 三装甲/两装甲只用基础半径和基础高度；前哨站把 [13] 当作高度阶梯。
   // ==========================================
-  Eigen::VectorXd x0 = Eigen::VectorXd::Zero(11);
+  Eigen::VectorXd x0 = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
 
-  // 如果是前哨站，将 z_ (x[10]) 的初始值设为物理理论值
+  // 前哨站：把高度阶梯放到第一个高度槽；四装甲普通目标四块偏置都从 0 起估。
   double initial_dz =
     name == ArmorName::outpost ? RVfromFYT::kTowerArmorHeightStep : 0.0;
 
-  x0 << center_x, 0, center_y, 0, center_z, 0, ypr[0], 0, r, 0, initial_dz;
-  
-  Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(11, 11) * 10.0;
-  P0.block(0, 0, 11, 11) = P0_dig.asDiagonal();
+  x0[0] = center_x;
+  x0[2] = center_y;
+  x0[4] = center_z;
+  x0[6] = ypr[0];
+  x0[RVfromFYT::kRadiusIndex] = r;
+  x0[16] = initial_dz;  // 前哨站高度阶梯；四装甲普通目标为 0
+
+  Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(RVfromFYT::kStateDimension,
+                                                 RVfromFYT::kStateDimension) * 10.0;
+  P0.block(0, 0, RVfromFYT::kStateDimension, RVfromFYT::kStateDimension) =
+    P0_dig.asDiagonal();
 
   ekf_ = RVfromFYT(x0, P0, armor_num_, name);
   sync_tower_armor_heights();
@@ -101,12 +109,18 @@ Target::Target(double x, double vyaw, double radius, double h)
   t_(std::chrono::steady_clock::now()),
   uuid_(next_uuid())
 {
-  Eigen::VectorXd x0 = Eigen::VectorXd::Zero(11);
-  x0 << x, 0, 0, 0, 0, 0, 0, vyaw, radius, 0, h;
+  Eigen::VectorXd x0 = Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+  x0[0] = x;
+  x0[7] = vyaw;
+  x0[RVfromFYT::kRadiusIndex] = radius;
+  x0[RVfromFYT::kHeightOffsetIndex] = h;
 
-  Eigen::VectorXd P0_dig{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
-  Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(11, 11) * 10.0;
-  P0.block(0, 0, 11, 11) = P0_dig.asDiagonal();
+  Eigen::VectorXd P0_dig =
+    Eigen::VectorXd::Zero(RVfromFYT::kStateDimension);
+  Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(RVfromFYT::kStateDimension,
+                                                 RVfromFYT::kStateDimension) * 10.0;
+  P0.block(0, 0, RVfromFYT::kStateDimension, RVfromFYT::kStateDimension) =
+    P0_dig.asDiagonal();
 
   ekf_ = RVfromFYT(x0, P0, armor_num_, name);
   sync_tower_armor_heights();
@@ -152,7 +166,7 @@ void Target::predict(double dt, Eigen::VectorXd u_xyz)
   auto rvFromFytpredict = [&]() -> void {
     double v1, v2;
     if (name == ArmorName::outpost) {
-      ekf_.x[10] = RVfromFYT::kTowerArmorHeightStep;
+      ekf_.x[16] = RVfromFYT::kTowerArmorHeightStep;
       // 前哨站位置固定，收敛后极大限制平移噪声
       if (this->convergened()) {
           v1 = 0.1;  // 锁死 X, Y, Z 中心
@@ -287,7 +301,7 @@ bool Target::update(
     const std::vector<Eigen::Vector4d> xyza_list = armor_xyza_list();
     if (xyza_list.size() < 3) return false;
 
-    ekf_.x[10] = RVfromFYT::kTowerArmorHeightStep;
+    ekf_.x[16] = RVfromFYT::kTowerArmorHeightStep;
 
     std::vector<std::pair<Eigen::Vector4d, int>> xyza_i_list;
     for (int i = 0; i < std::min<int>(armor_num_, xyza_list.size()); i++) {
@@ -535,13 +549,32 @@ Eigen::Matrix<double, 5, 1> Target::aim_armor_xyzad(int id) const
   return result;
 }
 
-// 检查滤波器半径是否发散
+void Target::set_armor_offsets(
+  const std::array<double, 4> & lateral, const std::array<double, 4> & height)
+{
+  if (armor_num_ != 4 || name == ArmorName::outpost) return;
+  ekf_.set_armor_offsets(lateral, height);
+}
+
+// 检查滤波器半径/每板偏置是否发散
 bool Target::diverged() const
 {
-  auto r_ok = ekf_.x[8] > 0.05 && ekf_.x[8] < 0.5;
-  auto l_ok = ekf_.x[8] + ekf_.x[9] > 0.05 && ekf_.x[8] + ekf_.x[9] < 0.5;
-  if (r_ok && l_ok) return false;
-  return true;
+  const auto & x = ekf_.x;
+  if (x.size() != RVfromFYT::kStateDimension) return true;
+  auto radius_ok = [](double r) { return r > 0.05 && r < 0.5; };
+  if (!radius_ok(x[RVfromFYT::kRadiusIndex])) return true;
+
+  if (name == ArmorName::outpost) {
+    return std::abs(x[16]) > 0.5;
+  }
+  if (armor_num_ == 4) {
+    // 零均值参数化：只有前 3 个独立状态，第 4 块由负和导出
+    for (int i = 0; i < 3; ++i) {
+      if (std::abs(x[RVfromFYT::kLateralOffsetIndex + i]) > 0.5) return true;
+      if (std::abs(x[RVfromFYT::kHeightOffsetIndex + i]) > 0.5) return true;
+    }
+  }
+  return false;
 }
 
 // 判断当前目标是否收敛

@@ -329,6 +329,15 @@ target_link_libraries(rb_auto_standard_async ${OpenCV_LIBS} fmt::fmt yaml-cpp au
 target_link_libraries(rb_auto_standard_debug_async ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 target_link_libraries(rb_auto_aim_debug_fft ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 
+# 统一自瞄程序：命令行 --thread 切换单/多线程，--sb_send 切换普通帧/哨兵帧。
+# 两个目标都只依赖 auto_aim/tools/io，不引入打符，因此在 OpenVINO(x86) 与
+# TensorRT(NX) 两种后端下都能直接编译。
+add_executable(rb_auto_aim_runtime src/rb_auto_aim_runtime.cpp)
+add_executable(rb_auto_aim_debug_runtime src/rb_auto_aim_debug_runtime.cpp)
+target_link_libraries(rb_auto_aim_runtime ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+target_link_libraries(
+    rb_auto_aim_debug_runtime ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+
 add_executable(rune_config_test tests/rune_config_test.cpp)
 target_link_libraries(
     rune_config_test

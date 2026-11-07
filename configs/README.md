@@ -199,14 +199,14 @@ RV 数字分类器额外读取一个顶层 `number_classifier` 节点（在 `her
 
 中心加速度样本取自 EKF 校正后的整车旋转中心，而不是单块装甲板原始位置。基地和前哨站固定禁用该前馈；目标重建、相机切换、时间倒退或异常采样间隔会清空拟合历史。
 
-注意 `multi_armor_fusion` 在 `rb_auto_aim.yaml`、`sb_short.yaml` 里是 `true`（已启用），`demo.yaml` 里是 `false`。
+注意 `configs/` 下所有 yaml 现在都写入了 `multi_armor_fusion: true`（包括相机/标定/打符配置；对应程序不读取该键时会忽略）。
 `meas_*_sigma` 三个键只有 `rb_auto_aim.yaml` 显式给出（`0.01 / 0.15 / 0.10`），其余配置走默认的启发式。
 
 ### UV（灯条端点）观测
 
 启用后 EKF 改用灯条端点的像素观测（UVL）而不是世界系 `[yaw,pitch,distance,armor_yaw]`。
-这批键由 `Tracker::load_uv_config()` 读取，全部可选；`rb_auto_aim.yaml` 与 `sb_short.yaml` 均已
-`uv_observation: true`。
+这批键由 `Tracker::load_uv_config()` 读取，全部可选；`configs/` 下所有 yaml 现在都已写入并开启
+`uv_observation: true`（相机、标定和打符程序不创建 Tracker，会忽略这些键）。
 
 | 字段 | 类型 | 状态/默认值 | 作用 |
 | --- | --- | --- | --- |

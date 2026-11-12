@@ -145,6 +145,13 @@ private:
   /** @brief 解析 yaml 中的 UV 配置 */
   void load_uv_config(const YAML::Node & yaml);
 
+  /**
+   * @brief 给本帧候选装甲板补一个窄窗 PnP 装甲朝向（UV 模式下 θ 的 1 维弱观测）
+   * @param armors 候选装甲板列表（就地写入 ypr_in_world[0] 并置 pnp_yaw_valid）
+   * @note 只处理与当前目标同名同型的装甲板；求解器不支持或未开启时静默跳过
+   */
+  void attach_pnp_yaw(std::list<Armor> & armors);
+
   /** @brief 重置周期运动采样状态 */
   void reset_fft_sample_state();
   /** @brief 向周期运动分析器添加装甲板样本 @param armor 匹配装甲板（其 xyz_in_world 须已由 PnP 写入） @param t 帧时间戳 */

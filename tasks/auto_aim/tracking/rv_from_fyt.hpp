@@ -108,6 +108,14 @@ public:
   std::size_t uv_observation_count() const { return uv_pending_.size(); }
 
   /**
+   * @brief 用一条窄窗 PnP 得到的装甲朝向做 1 维 EKF 更新
+   * @param armor_id 装甲板编号 @param yaw 观测到的装甲朝向（世界系 rad） @param sigma 观测标准差 (rad)
+   * @return 实际执行了更新时返回 true（未启用 / 野值被 3σ 门限拒绝时返回 false）
+   * @note 观测量是整块板的绝对朝向 θ_id = x[6] + id*2π/armor_num，H 只有第 6 列非零
+   */
+  bool correct_uv_yaw(int armor_id, double yaw, double sigma);
+
+  /**
    * @brief 用本帧所有待更新 UV 观测做一次联合更新（等价于批量观测的 EKF）
    * @return 实际执行的观测条数；失败返回 0
    */
@@ -245,6 +253,9 @@ private:
     UvModel::Noise R = UvModel::Noise::Zero();
     Eigen::Matrix<double, UvModel::kDim, 3> J_att =
       Eigen::Matrix<double, UvModel::kDim, 3>::Zero();
+    bool has_yaw = false;       ///< 是否附带窄窗 PnP 的装甲朝向观测
+    double yaw = 0.0;           ///< 观测到的装甲朝向（世界系 rad）
+    double yaw_sigma = 0.0;     ///< 该朝向观测的标准差 (rad)
   };
   std::vector<UvPending> uv_pending_;           ///< 本帧待更新的 UV 观测列表
 

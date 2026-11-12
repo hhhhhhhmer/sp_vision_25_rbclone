@@ -58,15 +58,29 @@ std::list<Armor> + timestamp -> Tracker -> std::list<Target>
 - `predict(state, armor_id, type)` / `jacobian(state, armor_id, type)`：由 EKF 状态投影出观测及其 8x17 雅可比。
 - `noise(state, armor_id, type, z)`：中心像素噪声按姿态误差给大值，长度噪声按端点检测噪声给小值，各向异性由参数天然表达；`attitude_common_ratio` 控制姿态误差里"整帧共模"与"各灯条独立"的比例。
 - `associate_gate_px`、`facing_cos_min`：灯条中心像素距离的关联门限，以及装甲板法线与视线夹角余弦的可见性判据。
-- `radius_prior_sigma`、`process_noise_z_scale`：单装甲退化时的半径先验，以及深度方向的过程噪声缩放。
+- `radius_prior_sigma`、`process_noise_z_scale`：单装甲退化时的半径先验，以及深度方向的过程噪声缩放
+  （`Q_z = v1·scale`；深度只由灯条长度反推，闭环自瞄下要平滑就调小）。
 
 UV 观测的好处：长度是差分量，对云台姿态误差（共模平移）不敏感，是深度信息的主要来源；装甲板 4 角点是对称矩形，
 法线翻转 180° 时投影点集合不变，因此天生没有 PnP 的镜像解歧义。
 
+**代价是装甲朝向 θ 变弱了**：UV 下 θ 只有"两条灯条间距（宽度）"这一路信息，而宽度对 θ 的导数正比于
+`sin(相对角)`，正对相机时恰好为 0（那一刻正是云台瞄着它的时候）。闭环自瞄自转靶时，θ 的相位滞后会经
+`r/d` 杠杆（`r=0.2m`、4m 处约 2.9°）变成云台自激。为此加了 `pnp_yaw_*` 一族配置：
+
+- `Tracker::attach_pnp_yaw()`：UV 模式下每帧对候选装甲板调用一次 `Solver::try_solve_yaw()`
+  （一次 `solvePnP` + 以云台朝向为中心 ±20°/20 步的窄窗搜索，约 30~90us），把结果写进
+  `Armor::ypr_in_world[0]` 并置 `Armor::pnp_yaw_valid`。窗口窄所以不会像 ±70° 全窗口那样跳到镜像解/相邻板。
+- `RVfromFYT::add_uv_observation()` 把它挂到对应装甲板的待更新观测上，`correct_uv_batch()` 在 UV 联合更新
+  **之后**再做一次 1 维更新：`z=[θ_measured]`、`H` 只有第 6 列，σ 默认 5°。带 3σ 硬门限，
+  正对时 PnP 在 ±φ 之间跳产生的野值会被拒绝（否则会污染 NIS 统计、触发 "Bad Converge Found!" 丢跟踪）。
+- 效果上等价于"UV 给位置/深度，PnP 给 θ"；`uv_pnp_yaw: false` 可退回纯 UV 做 A/B。
+
 `Tracker` 侧的相关接口：`uv_enabled()` / `set_uv_enabled()`、`last_update_count()`（本帧实际参与融合的观测数）；
 配置键为 `uv_observation`、`uv_sigma_px`、`uv_sigma_len_ratio`、`uv_sigma_attitude_deg`、
 `uv_attitude_common_ratio`、`uv_sigma_angle`、`uv_associate_gate_px`、`uv_facing_cos_min`、
-`uv_radius_prior_sigma`、`uv_process_noise_z_scale`（见 `configs/README.md`）。
+`uv_radius_prior_sigma`、`uv_process_noise_z_scale`、`uv_pnp_yaw`、`uv_pnp_yaw_sigma_deg`、
+`uv_pnp_yaw_window_deg`、`uv_pnp_yaw_steps`（见 `configs/README.md`）。
 可视化由 `tools/uv_overlay.hpp` 提供。
 
 ### 其他辅助

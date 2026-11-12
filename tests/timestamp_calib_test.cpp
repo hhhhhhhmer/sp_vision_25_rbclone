@@ -15,6 +15,7 @@
 //   ./build/timestamp_calib_test ../configs/rb_auto_aim.yaml            # 手动摆
 //   ./build/timestamp_calib_test ../configs/rb_auto_aim.yaml --auto     # 自动摆
 //   空格 开始/重新采样，采样期间任意键中止（自动模式会立刻放开云台），q 退出。
+//   --detector traditional 退回传统视觉检测器；默认 yolo，与自瞄主程序同一套检测。
 
 #include "tools/timestamp_calib.hpp"
 
@@ -24,6 +25,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <list>
+#include <memory>
 #include <mutex>
 #include <opencv2/opencv.hpp>
 #include <optional>
@@ -34,6 +37,7 @@
 #include "io/camera/camera.hpp"
 #include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/detection/detector.hpp"
+#include "tasks/auto_aim/detection/yolo.hpp"
 #include "tasks/auto_aim/geometry/solver.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
@@ -46,10 +50,11 @@ const std::string keys =
   "{help h usage ? |                             | 输出命令行参数说明}"
   "{@config-path   | ../configs/rb_auto_aim.yaml | 位置参数，yaml 配置文件路径}"
   "{d duration     | 3.0                         | 采样时长(s)，自动模式下是摆动时长}"
-  "{auto a         | true                       | 自动控制云台摆动（需把遥控切到自瞄模式）}"
+  "{auto a         | true                        | 自动控制云台摆动（需把遥控切到自瞄模式）}"
   "{amplitude      | 20.0                        | 自动摆动的幅度(deg)，限制在 5~40}"
   "{freq           | 1.2                         | 自动摆动的频率(Hz)，限制在 0.3~3}"
-  "{sb s           | true                       | 用哨兵帧 sb_send 下发（默认用带 CRC 的 send）}";
+  "{detector       | yolo                        | 检测器后端：yolo（默认，与自瞄一致）或 traditional}"
+  "{sb s           | true                        | 用哨兵帧 sb_send 下发（默认用带 CRC 的 send）}";
 
 namespace
 {
@@ -292,11 +297,34 @@ int main(int argc, char * argv[])
   tools::Exiter exiter;
   io::Camera camera(config_path);
   io::Gimbal gimbal(config_path);
-  auto_aim::Detector detector(config_path, false);
+
+  // 检测器：自瞄主程序用的是 YOLO，这里默认跟它保持一致，避免传统视觉在现场光照下
+  // 检不到装甲板；--detector traditional 可以退回旧路径做对照。
+  const std::string detector_name = cli.get<std::string>("detector");
+  const bool use_yolo = detector_name != "traditional";
+  if (detector_name != "yolo" && detector_name != "traditional") {
+    tools::logger()->warn(
+      "[calib] 未知检测器 \"{}\"，按 yolo 处理（可选：yolo / traditional）", detector_name);
+  }
+  std::unique_ptr<auto_aim::YOLO> yolo;
+  std::unique_ptr<auto_aim::Detector> traditional;
+  if (use_yolo) {
+    yolo = std::make_unique<auto_aim::YOLO>(config_path, false);
+  } else {
+    traditional = std::make_unique<auto_aim::Detector>(config_path, false);
+  }
+  // 标定必须用同步检测：异步流水线返回的是流水线里较早的那一帧，会和当前帧时间戳错配
+  auto detect_armors = [&](const cv::Mat & image, int frame_index) -> std::list<auto_aim::Armor> {
+    if (yolo) return yolo->detect(image, frame_index);
+    return traditional->detect(image, frame_index);
+  };
+
   auto_aim::Solver solver(config_path);
 
   // 声明顺序很重要：sweep 必须比 gimbal 先析构，析构时才能把云台放开
   SweepController sweep(gimbal, use_sb);
+
+  tools::logger()->info("[calib] 检测器: {}", use_yolo ? "yolo" : "traditional");
 
   if (auto_mode) {
     tools::logger()->warn(
@@ -326,7 +354,7 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, t);
-    const auto armors = detector.detect(img, frame_count++);
+    const auto armors = detect_armors(img, frame_count++);
 
     // 选一块"始终是同一块"的装甲板：解算成功 + 距离合理 + 与参考距离最接近
     std::optional<auto_aim::Armor> chosen;

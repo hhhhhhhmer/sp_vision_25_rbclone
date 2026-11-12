@@ -219,10 +219,17 @@ RV 数字分类器额外读取一个顶层 `number_classifier` 节点（在 `her
 | `uv_associate_gate_px` | double | 可选，`40.0` | 灯条中心像素距离的关联门限，px |
 | `uv_facing_cos_min` | double | 可选，`0.15` | 可见性判据：装甲板法线与视线夹角的余弦下限 |
 | `uv_radius_prior_sigma` | double | 可选，`0.03` | 单装甲退化保护：半径初始协方差标准差，m；`<= 0` 表示沿用原值 |
-| `uv_process_noise_z_scale` | double | 可选，`1.0` | 深度方向过程噪声缩放系数；只在 UV 模式下生效 |
+| `uv_process_noise_z_scale` | double | 可选，`1.0` | 深度方向过程噪声缩放系数；只在 UV 模式下生效（`Q_z = v1·scale`） |
+| `uv_pnp_yaw` | bool | 可选，`false` | 是否在 UV 模式下用窄窗 PnP 给装甲朝向 θ 补一个 1 维观测 |
+| `uv_pnp_yaw_sigma_deg` | double | 可选，`5.0` | 该朝向观测的标准差，degree |
+| `uv_pnp_yaw_window_deg` | double | 可选，`20.0` | 窄窗搜索半宽（以云台朝向为中心），degree |
+| `uv_pnp_yaw_steps` | int | 可选，`20` | 窄窗搜索步数（步长 = 2·window/steps） |
 
 UV 模式下的行为差异：Tracker 逐帧不再调用 `Solver::try_solve()`（PnP 只在建立新目标时执行一次），
 相机几何每帧从当前 solver 重新获取，几何无效时回退到 ypd 观测并只告警一次。
+开启 `uv_pnp_yaw` 后每帧会额外调用一次 `Solver::try_solve_yaw()`（一次 `solvePnP` + 20 步窄窗搜索），
+把结果当 σ≈5° 的 1 维测量送给 EKF——UV 的朝向 θ 只有“两条灯条间距”这一路弱信息，
+正对时导数还是 0，闭环跟踪自转靶时相位滞后会经 `r/d` 杠杆变成云台自激。
 参数含义的更多说明见 `tasks/auto_aim/tracking/README.md`，可视化见 `tools/uv_overlay.hpp`。
 
 ## Aimer 与 Shooter

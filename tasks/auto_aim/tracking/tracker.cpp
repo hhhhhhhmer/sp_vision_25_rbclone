@@ -136,6 +136,14 @@ void Tracker::load_uv_config(const YAML::Node & yaml)
     optional_value(yaml, "uv_radius_prior_sigma", uv_config_.radius_prior_sigma);
   uv_config_.process_noise_z_scale =
     optional_value(yaml, "uv_process_noise_z_scale", uv_config_.process_noise_z_scale);
+  // 窄窗 PnP yaw：UV 下 θ 只有"灯条间距"这一路弱信息（正对时导数还是 0），闭环自瞄时
+  // 相位滞后会经 r/d 杠杆变成云台自激，这里补一个直接观测
+  uv_config_.pnp_yaw_enabled = optional_value(yaml, "uv_pnp_yaw", uv_config_.pnp_yaw_enabled);
+  uv_config_.pnp_yaw_sigma_deg =
+    optional_value(yaml, "uv_pnp_yaw_sigma_deg", uv_config_.pnp_yaw_sigma_deg);
+  uv_config_.pnp_yaw_window_deg =
+    optional_value(yaml, "uv_pnp_yaw_window_deg", uv_config_.pnp_yaw_window_deg);
+  uv_config_.pnp_yaw_steps = optional_value(yaml, "uv_pnp_yaw_steps", uv_config_.pnp_yaw_steps);
   uv_radius_prior_sigma_ = uv_config_.radius_prior_sigma;
 }
 
@@ -161,6 +169,19 @@ void Tracker::apply_uv_config()
     tools::logger()->warn(
       "[Tracker] uv_observation=true 但当前求解器未提供有效相机几何（内参/畸变/外参），"
       "已回退传统 ypd 观测");
+  }
+}
+
+void Tracker::attach_pnp_yaw(std::list<Armor> & armors)
+{
+  if (!uv_config_.pnp_yaw_enabled) return;
+  if (uv_config_.pnp_yaw_sigma_deg <= 0.0 || uv_config_.pnp_yaw_steps < 1) return;
+
+  for (auto & armor : armors) {
+    if (armor.name != target_.name || armor.type != target_.armor_type) continue;
+    if (armor.pnp_yaw_valid) continue;
+    // 失败时不动 armor（pnp_yaw_valid 保持 false），EKF 侧会自动退化为纯 UV 观测
+    solver_->try_solve_yaw(armor, uv_config_.pnp_yaw_window_deg, uv_config_.pnp_yaw_steps);
   }
 }
 
@@ -706,6 +727,11 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
     apply_uv_config();
   }
   if (target_.uv_ready()) {
+    // 装甲朝向 θ 在 UV 下只有"两条灯条间距"这一路弱信息，正对时导数还是 0；闭环自瞄时
+    // 这个相位的滞后会经 r/d 杠杆变成云台自激。这里每帧用窄窗 PnP（±20°/20 步，约 30us）
+    // 给 θ 补一个直接观测，EKF 里作为 σ≈5° 的一维测量用。
+    attach_pnp_yaw(armors);
+
     // 前哨站/基地：每帧只更新一块装甲板（与老路径一致）
     // 若允许帧内顺序更新多块板，last_id 会在帧内来回跳，下一帧立刻触发"换板"，
     // 前哨站高度锚点的采样窗口被压到 1~2 帧，锚点会学成 0.1×真实高度、

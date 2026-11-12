@@ -29,6 +29,17 @@ const std::vector<cv::Point3f> SMALL_ARMOR_POINTS{
   {0, -SMALL_ARMOR_WIDTH / 2, -LIGHTBAR_LENGTH / 2},
   {0, SMALL_ARMOR_WIDTH / 2, -LIGHTBAR_LENGTH / 2}};
 
+namespace
+{
+/** @brief 平衡/英雄大装甲：倾角假设不成立，传统路径也不做 yaw 优化 @param armor 装甲板 @return 是平衡装甲时返回 true */
+bool is_balance_armor(const Armor & armor)
+{
+  return armor.type == ArmorType::big &&
+         (armor.name == ArmorName::three || armor.name == ArmorName::four ||
+          armor.name == ArmorName::five);
+}
+}  // namespace
+
 Solver::Solver(const std::string & config_path) : R_gimbal2world_(Eigen::Matrix3d::Identity())
 {
   auto yaml = YAML::LoadFile(config_path);
@@ -135,7 +146,7 @@ CameraGeometry Solver::camera_geometry() const
   return geometry;
 }
 
-bool Solver::try_solve(Armor & armor) const
+bool Solver::solve_pnp_stage(Armor & armor) const
 {
   if (armor.points.size() != 4 ||
       !std::all_of(armor.points.begin(), armor.points.end(), [](const cv::Point2f & point) {
@@ -159,12 +170,10 @@ bool Solver::try_solve(Armor & armor) const
   }
   if (!cv::checkRange(rvec) || !cv::checkRange(tvec)) return false;
 
-  Armor solved = armor;
-
   Eigen::Vector3d xyz_in_camera;
   cv::cv2eigen(tvec, xyz_in_camera);
-  solved.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
-  solved.xyz_in_world = R_gimbal2world_ * solved.xyz_in_gimbal;
+  armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
+  armor.xyz_in_world = R_gimbal2world_ * armor.xyz_in_gimbal;
 
   cv::Mat rmat;
   cv::Rodrigues(rvec, rmat);
@@ -172,21 +181,39 @@ bool Solver::try_solve(Armor & armor) const
   cv::cv2eigen(rmat, R_armor2camera);
   Eigen::Matrix3d R_armor2gimbal = R_camera2gimbal_ * R_armor2camera;
   Eigen::Matrix3d R_armor2world = R_gimbal2world_ * R_armor2gimbal;
-  solved.ypr_in_gimbal = tools::eulers(R_armor2gimbal, 2, 1, 0);
-  solved.ypr_in_world = tools::eulers(R_armor2world, 2, 1, 0);
+  armor.ypr_in_gimbal = tools::eulers(R_armor2gimbal, 2, 1, 0);
+  armor.ypr_in_world = tools::eulers(R_armor2world, 2, 1, 0);
 
-  solved.ypd_in_world = tools::xyz2ypd(solved.xyz_in_world);
-  if (!solved.xyz_in_gimbal.allFinite() || !solved.xyz_in_world.allFinite() ||
-      !solved.ypr_in_gimbal.allFinite() || !solved.ypr_in_world.allFinite() ||
-      !solved.ypd_in_world.allFinite()) {
-    return false;
-  }
+  armor.ypd_in_world = tools::xyz2ypd(armor.xyz_in_world);
+  return armor.xyz_in_gimbal.allFinite() && armor.xyz_in_world.allFinite() &&
+         armor.ypr_in_gimbal.allFinite() && armor.ypr_in_world.allFinite() &&
+         armor.ypd_in_world.allFinite();
+}
+
+bool Solver::try_solve(Armor & armor) const
+{
+  Armor solved = armor;
+  if (!solve_pnp_stage(solved)) return false;
 
   // 平衡不做yaw优化，因为pitch假设不成立
-  auto is_balance = (armor.type == ArmorType::big) &&
-                    (armor.name == ArmorName::three || armor.name == ArmorName::four ||
-                     armor.name == ArmorName::five);
-  if (!is_balance) optimize_yaw(solved);
+  if (!is_balance_armor(solved)) optimize_yaw(solved);
+
+  armor = std::move(solved);
+  return true;
+}
+
+bool Solver::try_solve_yaw(Armor & armor, double half_window_deg, int steps) const
+{
+  // 与 try_solve 保持一致：平衡大装甲的倾角假设不成立，PnP 给出的 yaw 不可信
+  if (is_balance_armor(armor)) return false;
+
+  Armor solved = armor;
+  if (!solve_pnp_stage(solved)) return false;
+
+  // 与传统路径同一套几何，只是把搜索窗口收窄：不会跳到镜像解/相邻板，代价约为全窗口的 1/7
+  const double center_yaw = tools::eulers(R_gimbal2world_, 2, 1, 0)[0];
+  optimize_yaw_in_range(solved, center_yaw, half_window_deg, steps);
+  solved.pnp_yaw_valid = true;
 
   armor = std::move(solved);
   return true;
@@ -338,17 +365,26 @@ double Solver::oupost_reprojection_error(Armor armor, const double & pitch)
 
 void Solver::optimize_yaw(Armor & armor) const
 {
-  Eigen::Vector3d gimbal_ypr = tools::eulers(R_gimbal2world_, 2, 1, 0);
+  // 传统路径：以云台朝向为中心 ±70° 全窗口搜索，能纠正镜像解/跳板
+  const double center_yaw = tools::eulers(R_gimbal2world_, 2, 1, 0)[0];
+  optimize_yaw_in_range(armor, center_yaw, 70.0, 140);
+}
 
-  constexpr double SEARCH_RANGE = 140;  // degree
-  auto yaw0 = tools::limit_rad(gimbal_ypr[0] - SEARCH_RANGE / 2 * CV_PI / 180.0);
+void Solver::optimize_yaw_in_range(
+  Armor & armor, double center_yaw, double half_range_deg, int steps) const
+{
+  if (!std::isfinite(center_yaw) || !(half_range_deg > 0.0) || steps < 1) return;
+
+  const double half_range = half_range_deg * CV_PI / 180.0;
+  const double step = 2.0 * half_range / static_cast<double>(steps);
+  const double yaw0 = tools::limit_rad(center_yaw - half_range);
 
   auto min_error = 1e10;
   auto best_yaw = armor.ypr_in_world[0];
 
-  for (int i = 0; i < SEARCH_RANGE; i++) {
-    double yaw = tools::limit_rad(yaw0 + i * CV_PI / 180.0);
-    auto error = armor_reprojection_error(armor, yaw, (i - SEARCH_RANGE / 2) * CV_PI / 180.0);
+  for (int i = 0; i <= steps; i++) {
+    double yaw = tools::limit_rad(yaw0 + i * step);
+    auto error = armor_reprojection_error(armor, yaw, 0.0);
 
     if (error < min_error) {
       min_error = error;

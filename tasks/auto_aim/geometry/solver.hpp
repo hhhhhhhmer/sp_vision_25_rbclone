@@ -40,6 +40,17 @@ public:
   /** @brief 尝试求解装甲板位姿 @param armor 待求解装甲板 @return 成功时返回 true，求解异常时返回 false */
   bool try_solve(Armor & armor) const override;
 
+  /**
+   * @brief 只解算装甲板朝向：PnP 定位置 + 以云台朝向为中心的窄窗 yaw 搜索
+   * @param armor 待求解装甲板（就地写回 ypr_in_world/xyz_in_world 并置 pnp_yaw_valid）
+   * @param half_window_deg 搜索半宽（deg）
+   * @param steps 搜索步数
+   * @return 成功时返回 true
+   * @note 给 UV 观测补 θ 的直接观测用。窗口窄（默认 ±20°）因此不会像 ±70° 全窗口那样
+   *       跳到镜像解/相邻板，代价约为全窗口搜索的 1/7（约 30us + 一次 solvePnP）
+   */
+  bool try_solve_yaw(Armor & armor, double half_window_deg, int steps) const override;
+
   /** @brief 获取当前相机内外参与云台到世界的旋转（UV 观测使用） @return 相机几何 */
   CameraGeometry camera_geometry() const override;
 
@@ -75,6 +86,13 @@ private:
 
   /** @brief 通过重投影误差优化装甲板偏航角 @param armor 待优化装甲板 */
   void optimize_yaw(Armor & armor) const;
+
+  /** @brief 在指定中心与半宽内搜索最优偏航角 @param armor 待优化装甲板 @param center_yaw 搜索中心 (rad) @param half_range_deg 搜索半宽 (deg) @param steps 步数 */
+  void optimize_yaw_in_range(
+    Armor & armor, double center_yaw, double half_range_deg, int steps) const;
+
+  /** @brief 执行 PnP 并把位姿写回装甲板（不含 yaw 优化） @param armor 就地写入 @return 成功时返回 true @note 失败时 armor 可能被部分改写，调用方应传入副本 */
+  bool solve_pnp_stage(Armor & armor) const;
 
   /** @brief 计算指定偏航和倾角下的装甲板重投影误差 @param armor 装甲板 @param yaw 偏航角 @param inclined 倾斜角 @return 重投影误差 */
   double armor_reprojection_error(const Armor & armor, double yaw, const double & inclined) const;

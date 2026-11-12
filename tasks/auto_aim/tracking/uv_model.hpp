@@ -50,6 +50,21 @@ struct UvConfig
    * 过大的深度过程噪声会让深度跟着长度测量抖动。这里给 z 轴单独缩放。
    */
   double process_noise_z_scale = 1.0;
+  /**
+   * @brief 是否在 UV 模式下额外用窄窗 PnP 给装甲朝向 θ 补一个 1 维观测
+   *
+   * UV 观测里 θ 只有"两条灯条间距（宽度）"这一路信息，而宽度对 yaw 的导数正比于
+   * sin(相对角)、正对时为 0，所以 θ 在最该准的时候最不可观测；闭环自瞄时 θ 的相位滞后
+   * 会经 r/d 杠杆（4m 处 2.9°）变成云台自激。开这个开关后 Solver::try_solve_yaw()
+   * 会在云台朝向 ±window 内做一次窄窗搜索，把结果当 σ≈5° 的一维测量送进 EKF。
+   */
+  bool pnp_yaw_enabled = false;
+  /** @brief 窄窗 PnP yaw 观测的标准差 (deg) */
+  double pnp_yaw_sigma_deg = 5.0;
+  /** @brief 窄窗搜索半宽 (deg)：以云台朝向为中心，太大易跳到镜像解/相邻板 */
+  double pnp_yaw_window_deg = 20.0;
+  /** @brief 窄窗搜索步数（步长 = 2*window/steps，20 步约 2°/步） */
+  int pnp_yaw_steps = 20;
 };
 
 /**

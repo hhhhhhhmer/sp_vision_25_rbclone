@@ -532,6 +532,19 @@ add_executable(
 target_link_libraries(uv_regression_test ${OpenCV_LIBS} fmt::fmt tools)
 add_test(NAME uv_regression_test COMMAND uv_regression_test)
 
+# UV 模式下的窄窗 PnP yaw：解算器 + EKF 的 θ 1 维观测
+add_executable(
+    uv_pnp_yaw_test
+    tests/uv_pnp_yaw_test.cpp
+    tasks/auto_aim/geometry/solver.cpp
+    tasks/auto_aim/tracking/uv_model.cpp
+    tasks/auto_aim/tracking/rv_from_fyt.cpp
+    tasks/auto_aim/model/armor.cpp)
+target_link_libraries(uv_pnp_yaw_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools)
+add_test(
+    NAME uv_pnp_yaw_test
+    COMMAND uv_pnp_yaw_test ${PROJECT_SOURCE_DIR}/configs/rb_auto_aim.yaml)
+
 # UV 观测可视化渲染测试：直接调用 tools::draw_uv_overlay，统计绘制像素确认真画上了角点。
 # 依赖 auto_aim 的 Target/EKF，因此只在有推理后端时构建（同 auto_aim_test）。
 if(OPENVINO_MAKE OR TENSOR_RT_MAKE)

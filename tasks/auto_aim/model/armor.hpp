@@ -115,6 +115,15 @@ struct Armor
 
   double yaw_raw = 0.0;  // rad
 
+  /**
+   * @brief 是否已由窄窗 PnP 写入可用的装甲朝向（ypr_in_world[0]）
+   *
+   * UV 观测逐帧不跑完整 PnP，装甲朝向 θ 只有"两条灯条间距"这一路弱信息（正对时导数还是 0），
+   * 闭环里相位会滞后。Solver::try_solve_yaw() 会用窄窗搜索补一个直接观测，置位本标志后
+   * RVfromFYT 才会把它当成 1 维测量用；传统 PnP 路径不读这个标志。
+   */
+  bool pnp_yaw_valid = false;
+
   /** @brief 构造空装甲板 */
   Armor() = default;
   /** @brief 由左右灯条构造传统视觉装甲板 @param left 左灯条 @param right 右灯条 */

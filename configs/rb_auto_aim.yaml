@@ -69,14 +69,26 @@ meas_angle_sigma: 0.10     # rad，装甲板朝向
 # 且每帧省掉约 200us 的 140 步 yaw 搜索。建议先离线 A/B 再上车。
 uv_observation: true
 uv_sigma_px: 1.0             # 灯条端点检测噪声 (px)
-uv_sigma_len_ratio: 0.02     # 与灯条像素长度成比例的附加端点噪声（尺度不变项）
+uv_sigma_len_ratio: 0.045    # 与灯条像素长度成比例的附加端点噪声（尺度不变项）
+                             # 深度只由灯条长度反推，闭环自瞄时"逐帧跟长度抖"会经弹道下坠
+                             # 变成 pitch_vel/pitch_acc 的高频抖动，所以比离线最优值放大
 uv_sigma_attitude_deg: 0.5   # 云台/外参姿态误差 (deg)，等效像素加到灯条中心噪声
 uv_attitude_common_ratio: 0.0 # 姿态误差中整帧共模的比例：0=各灯条独立，1=完全共模
 uv_sigma_angle: 0.1          # 灯条角度噪声下限 (rad)
 uv_associate_gate_px: 60.0   # 灯条中心像素距离关联门限
 uv_facing_cos_min: 0.15      # 可见性判据（装甲板法线与视线夹角余弦下限）
 uv_radius_prior_sigma: 0.02  # 单装甲退化保护：半径先验标准差 (m)
-uv_process_noise_z_scale: 1.0 # 深度过程噪声缩放；1.0 预测误差最优，0.01~0.1 深度更平滑
+# 深度（z）过程噪声缩放：Q_z = v1 * scale，v1 默认 100，故 0.05 等价于 v1_z = 5。
+# 1.0 是离线预测误差最优，但深度会跟着灯条长度逐帧抖；闭环自瞄下优先要平滑。
+uv_process_noise_z_scale: 0.05
+# 窄窗 PnP 装甲朝向：UV 下 θ 只有"两条灯条间距"一路弱信息（正对时导数还是 0），
+# 闭环跟踪自转靶时相位滞后会经 r/d 杠杆（4m 处 2.9°）变成云台自激。
+# 打开后每帧多做一次 solvePnP + 20 步窄窗搜索（约 30~90us），把 θ 当 σ=5° 的一维观测用。
+# 纯 UV（关闭）时 θ 只能靠过程噪声跑，适合离线对比。
+uv_pnp_yaw: true
+uv_pnp_yaw_sigma_deg: 5.0    # 该 yaw 观测的标准差；比传统路径的 meas_angle_sigma(5.7°) 略紧
+uv_pnp_yaw_window_deg: 20.0  # 以云台朝向为中心的搜索半宽，太宽会跳到镜像解/相邻板
+uv_pnp_yaw_steps: 20         # 搜索步数（步长 = 2*window/steps ≈ 2°）
 
 #####-----aimer参数-----#####
 # 远距离(target_h 超阈值)时的额外 pitch 补偿(度)；Planner 必须读到该键，缺失会直接退出

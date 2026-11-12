@@ -28,6 +28,23 @@ public:
   virtual bool try_solve(Armor & armor) const = 0;
 
   /**
+   * @brief 只解算装甲板朝向（窄窗 yaw 搜索），供 UV 模式的 θ 弱观测使用
+   * @param armor 待求解装甲板；成功时就地写入 ypr_in_world[0]（以及位置），并置 pnp_yaw_valid
+   * @param half_window_deg 搜索半宽（deg），以云台朝向为中心
+   * @param steps 搜索步数（步长 = 2*half_window/steps）
+   * @return 成功时返回 true
+   * @note 相比 try_solve() 只省掉"±70° 全窗口"那部分搜索，用于 UV 模式每帧给装甲朝向
+   *       补一个直接观测；默认实现返回 false，测试桩求解器会自动退化为纯 UV 观测
+   */
+  virtual bool try_solve_yaw(Armor & armor, double half_window_deg, int steps) const
+  {
+    (void)armor;
+    (void)half_window_deg;
+    (void)steps;
+    return false;
+  }
+
+  /**
    * @brief 获取当前相机的内外参几何（UV 观测使用）
    * @return 相机几何；求解器不支持时 valid=false
    * @note 长短焦切换时 Tracker 会换成另一台相机的求解器，因此本接口必须能返回当前相机

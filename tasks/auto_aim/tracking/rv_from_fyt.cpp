@@ -15,6 +15,7 @@ namespace
 {
 constexpr double kChiSquareThreshold = 9.488;
 constexpr double kHysteresisMargin = 5.0;
+constexpr double kPi = 3.14159265358979323846;
 }  // namespace
 
 /**
@@ -367,7 +368,55 @@ bool RVfromFYT::add_uv_observation(int armor_id, const Armor & armor)
   // 对角部分（检测噪声）；云台姿态误差是整帧共模，在 correct_uv_batch 里统一加 rank-3 项
   pending.R = uv_model_.diagonal_noise(pending.z);
   pending.J_att = uv_model_.attitude_jacobian(x, armor_id, armor.type);
+  // 窄窗 PnP 的装甲朝向：UV 下 θ 只有"灯条间距"这一路弱信息，正对时还不可观测，
+  // 闭环跟踪时相位会滞后；这里把它作为 1 维测量挂在同一条待更新观测上
+  if (uv_config_.pnp_yaw_enabled && armor.pnp_yaw_valid &&
+      uv_config_.pnp_yaw_sigma_deg > 0.0 && std::isfinite(armor.ypr_in_world[0])) {
+    pending.has_yaw = true;
+    pending.yaw = armor.ypr_in_world[0];
+    pending.yaw_sigma = uv_config_.pnp_yaw_sigma_deg * kPi / 180.0;
+  }
   uv_pending_.push_back(pending);
+  return true;
+}
+
+bool RVfromFYT::correct_uv_yaw(int armor_id, double yaw, double sigma)
+{
+  if (!uv_ready() || armor_id < 0 || armor_id >= armor_num_) return false;
+  if (!(sigma > 1e-6) || !std::isfinite(yaw)) return false;
+
+  const double angle_offset = armor_id * 2.0 * kPi / static_cast<double>(armor_num_);
+
+  // 先做 3σ 硬门限：正对相机时 PnP 的 yaw 会在 ±φ 之间跳（镜像解），这种野值既会把
+  // 状态拽偏，也会污染 EKF 的 NIS 统计，进而触发 Tracker 的 "Bad Converge Found!" 丢跟踪
+  const double innovation = tools::limit_rad(yaw - (x[6] + angle_offset));
+  if (std::abs(innovation) > 3.0 * sigma) return false;
+
+  Eigen::VectorXd z(1);
+  z << yaw;
+
+  Eigen::MatrixXd H = Eigen::MatrixXd::Zero(1, kStateDimension);
+  H(0, 6) = 1.0;
+
+  Eigen::MatrixXd R = Eigen::MatrixXd::Zero(1, 1);
+  R(0, 0) = sigma * sigma;
+
+  auto h = [angle_offset](const Eigen::VectorXd & state) {
+    Eigen::VectorXd prediction(1);
+    prediction << tools::limit_rad(state[6] + angle_offset);
+    return prediction;
+  };
+  auto subtract = [](const Eigen::VectorXd & observation, const Eigen::VectorXd & prediction) {
+    Eigen::VectorXd residual = observation - prediction;
+    residual[0] = tools::limit_rad(residual[0]);
+    return residual;
+  };
+
+  try {
+    tools::ExtendedKalmanFilter::update(z, H, R, h, subtract);
+  } catch (const std::exception &) {
+    return false;
+  }
   return true;
 }
 
@@ -409,6 +458,21 @@ std::size_t RVfromFYT::correct_uv_batch()
       uv_model_.jacobian(x, uv_pending_[k].armor_id, uv_pending_[k].type);
   }
 
+  // uv_pending_ 马上要被清空，先把附带的朝向观测拷出来
+  struct YawObservation
+  {
+    int armor_id;
+    double yaw;
+    double yaw_sigma;
+  };
+  std::vector<YawObservation> yaw_observations;
+  for (const auto & observation : uv_pending_) {
+    if (observation.has_yaw) {
+      yaw_observations.push_back(
+        {observation.armor_id, observation.yaw, observation.yaw_sigma});
+    }
+  }
+
   uv_pending_.clear();
 
   try {
@@ -416,6 +480,13 @@ std::size_t RVfromFYT::correct_uv_batch()
   } catch (const std::exception &) {
     return 0;
   }
+
+  // 装甲朝向的 1 维弱观测：在 UV 联合更新之后顺序做，相当于"UV 给位置/深度，PnP 给 θ"。
+  // 放在批量更新之后是为了让线性化点用上刚修正过的位置/半径（θ 与它们弱耦合）。
+  for (const auto & yaw_observation : yaw_observations) {
+    correct_uv_yaw(yaw_observation.armor_id, yaw_observation.yaw, yaw_observation.yaw_sigma);
+  }
+
   return count;
 }
 

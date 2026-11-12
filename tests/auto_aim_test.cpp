@@ -27,10 +27,10 @@ namespace
 
 const std::string keys =
   "{help h usage ? |                   | 输出命令行参数说明 }"
-  "{config-path c  | ../configs/rb_auto_aim.yaml | yaml配置文件的路径}"
+  "{config-path c  | ../configs/xiaohei.yaml || yaml配置文件的路径}"
   "{start-index s  | 0                 | 视频起始帧下标    }"
   "{end-index e    | 0                 | 视频结束帧下标    }"
-  "{@input-path    | ../快/2026-04-04_19-59-45  | avi和txt文件的路径}"
+  "{@input-path    | ../assets/demo/demo | avi和txt文件的路径}"
   // 注意：短选项名不能与 end-index 的 e 重复。OpenCV 4.5.4 会把重名的两个选项绑到同一个键上，
   // 传 -e=60 会同时改掉 end-index 和 save-every（静默开始写图）。
   "{save-every n    | 0                           | 每 N 帧保存一张带标注的图片，0 表示不保存}"
@@ -216,15 +216,15 @@ int main(int argc, char * argv[])
     }
 
     cv::resize(img, img, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
-    cv::imshow("reprojection", img);
-    auto key = cv::waitKey(10);
-    if (key == 'q') break;
-    if (key == 'u') {
-      // 运行时切换 UV / 传统观测：切换后会 reset，下一帧用 PnP 重新初始化
-      tracker.set_uv_enabled(!tracker.uv_enabled());
-      last_t = -1;  // 让下一帧重新走"首帧"逻辑
-      tools::logger()->info("[test] obs mode -> {}", tracker.uv_enabled() ? "UV" : "YPD");
-    }
+    // cv::imshow("reprojection", img);
+    // auto key = cv::waitKey(1);
+    // if (key == 'q') break;
+    // if (key == 'u') {
+    //   // 运行时切换 UV / 传统观测：切换后会 reset，下一帧用 PnP 重新初始化
+    //   tracker.set_uv_enabled(!tracker.uv_enabled());
+    //   last_t = -1;  // 让下一帧重新走"首帧"逻辑
+    //   tools::logger()->info("[test] obs mode -> {}", tracker.uv_enabled() ? "UV" : "YPD");
+    // }
 
     //  tools::logger()->info(
     //     "imshow : {:.1f}ms",  tools::delta_time(std::chrono::steady_clock::now(), inshow_start) * 1e3);

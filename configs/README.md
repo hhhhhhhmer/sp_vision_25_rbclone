@@ -199,8 +199,8 @@ RV 数字分类器额外读取一个顶层 `number_classifier` 节点（在 `her
 
 中心加速度样本取自 EKF 校正后的整车旋转中心，而不是单块装甲板原始位置。基地和前哨站固定禁用该前馈；目标重建、相机切换、时间倒退或异常采样间隔会清空拟合历史。
 
-注意 `configs/` 下所有 yaml 现在都写入了 `multi_armor_fusion: true`（包括相机/标定/打符配置；对应程序不读取该键时会忽略）。
-`meas_*_sigma` 三个键只有 `rb_auto_aim.yaml` 显式给出（`0.01 / 0.15 / 0.10`），其余配置走默认的启发式。
+注意 `configs/` 顶层所有 yaml（不含 `test/` 历史测试配置）现在都写入了完整的观测配置块：`multi_armor_fusion: true`、`multi_armor_gate`、`multi_armor_angle_sigma_scale`、全部 `uv_*`、`uv_pnp_yaw*` 和 `meas_*`（包括相机/标定/打符配置；对应程序不读取这些键时会忽略）。
+`meas_*_sigma` 统一为 `0.01 / 0.15 / 0.10`，但只在 PnP 路径生效；UV 模式使用 `uv_*` 噪声链。
 
 ### UV（灯条端点）观测
 

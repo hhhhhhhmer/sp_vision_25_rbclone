@@ -48,7 +48,7 @@ using namespace tools;
 
 const std::string keys =
   "{help h usage ? |                             | 输出命令行参数说明}"
-  "{@config-path   | ../configs/rb_auto_aim.yaml | 位置参数，yaml 配置文件路径}"
+  "{@config-path   | ../configs/sb_short.yaml | 位置参数，yaml 配置文件路径}"
   "{d duration     | 3.0                         | 采样时长(s)，自动模式下是摆动时长}"
   "{auto a         | true                        | 自动控制云台摆动（需把遥控切到自瞄模式）}"
   "{amplitude      | 20.0                        | 自动摆动的幅度(deg)，限制在 5~40}"

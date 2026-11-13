@@ -1,0 +1,182 @@
+pattern_cols: 11      # 棋盘格每行的内角点数（格子数-1）
+pattern_rows: 8      # 棋盘格每列的内角点数（格子数-1）
+square_size_mm: 30   # 棋盘格方块大小（毫米）
+
+# enemy_color: "blue"
+# enemy_color: "red"
+enemy_color: "auto"
+
+#####-----神经网络参数-----#####
+yolo_name: ov_0526
+classify_model: ../assets/tiny_resnet.onnx
+yolo11_model_path: ../assets/yolo11.xml
+yolov8_model_path: ../assets/yolov8.xml
+yolov5_model_path: ../assets/yolov5.xml
+tensorrt_engine_path: ../assets/0708_int8_calib.engine
+ov_0526_model_path: ../assets/yolov5_0526.xml
+# tensorrt_engine_path: ../assets/0708_fp16_super.engine
+device: CPU
+min_confidence: 0.5
+use_traditional: true
+
+#####-----ROI-----#####
+roi: 
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+use_roi: false
+
+# #####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 832
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+# min_confidence: 0.8
+
+# rv识别
+number_classifier:
+  model_path: "../assets/rv_model/mlp.onnx"   # 模型路径 (确保文件存在)
+  label_path: "../assets/rv_model/label.txt"  # 标签文件路径
+  threshold: 0.5                 # 数字分类阈值
+  ignore_classes: ["negative"]   # 忽略的类别
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 11
+outpost_max_temp_lost_count: 75
+
+
+#####-----aimer参数-----##### 12mm
+yaw_offset: 1.4 # degree -2.5
+pitch_offset: 2.4 # degree 2
+far_pitch_offset: 1.2
+far_high_pitch_offset: 1.7
+comming_angle: 60 # degree
+leaving_angle: 20 # degree
+decision_speed: 8 # rad/s
+high_speed_delay_time: 0.013 # s   远 0.25
+low_speed_delay_time: 0.015 # s    远 0.25
+gimbal_delay: 0.00
+shoot_offset: 2
+
+uv_observation: false
+uv_sigma_px: 1.0             # 灯条端点检测噪声 (px)
+uv_sigma_len_ratio: 0.02    # 与灯条像素长度成比例的附加端点噪声（尺度不变项）
+uv_sigma_attitude_deg: 0.5   # 云台/外参姿态误差 (deg)，等效像素加到灯条中心噪声
+uv_attitude_common_ratio: 0.0 # 姿态误差中整帧共模的比例：0=各灯条独立，1=完全共模
+uv_sigma_angle: 0.1          # 灯条角度噪声下限 (rad)
+uv_associate_gate_px: 60.0   # 灯条中心像素距离关联门限
+uv_facing_cos_min: 0.15      # 可见性判据（装甲板法线与视线夹角余弦下限）
+uv_radius_prior_sigma: 0.02  # 单装甲退化保护：半径先验标准差 (m)
+uv_process_noise_z_scale: 1.0 # 深度过程噪声缩放：Q_z = v1*scale（v1=100 → 5），闭环自瞄下优先平滑
+
+multi_armor_fusion: false
+
+#####-----shooter参数-----#####
+first_tolerance: 3 # 近距离射击容差，degree
+second_tolerance: 2 # 远距离射击容差，degree          
+judge_distance: 2 #距离判断阈值
+auto_fire: true # 是否由自瞄控制射击
+
+
+# # 6mm camera
+camera_name: "daheng"
+camera_sn: "KE0210030295"
+exposure_us: 6000
+gain: 1
+gamma: 1      
+img_gamma: 1
+img_gamma_shadow_offset: 0.04       # 暗部保护，越大越不易放大黑区噪声
+img_gamma_luma_denoise_sigma: 0.7   # Gamma 前亮度通道 3x3 高斯降噪
+img_gamma_chroma_denoise_sigma: 1.0 # Gamma 前色度通道 3x3 高斯降噪
+vid_pid: "2bdf:0001"
+flip: true
+mirror: true
+timestamp_offset_us: 4318 #us 2300
+
+# 6mm camera
+# camera_name: "daheng"
+# camera_sn: "KE0210030295"
+# exposure_us: 2000
+# gain: 1
+# gamma: 1      
+# img_gamma: 0.5
+# vid_pid: "2bdf:0001"
+# flip: true
+# mirror: true
+# timestamp_offset_us: 4318 #us 2300
+
+
+#6mm camera
+R_gimbal2imubody: [-1, 0, 0, 0, -1, 0, 0, 0, 1]
+
+# 重投影误差: 0.0963px
+camera_matrix: [1724.1824281808058, 0, 636.2493433291254, 0, 1724.0711526259488, 517.5140570610992, 0, 0, 1]
+distort_coeffs: [-0.05763459623328786, 0.19372680030697356, 0.0011645932763771258, 0.0018185288864517564, -0.22294216845609438]
+
+# 相机同理想情况的偏角: yaw0.34 pitch-1.44 roll-3.66 degree
+# 标定板到世界坐标系原点的水平距离: 1.91 m
+# 标定板同竖直摆放时的偏角: yaw121.94 pitch17.27 roll178.56 degree
+R_camera2gimbal: [-0.014382441396890712, -0.04772607375287943, 0.9987569109966647, -0.9975150678543474, -0.06821347356475832, -0.017624171690243436, 0.06896981066381237, -0.9965285464593399, -0.046626401412001514]
+t_camera2gimbal: [0.13380000672615866, 0.028603575507608427, 0.04209343266536808]
+
+
+# reprojection error: 0.115 px
+
+# _camera2gimbal第一位调yaw
+# _camera2gimbal第二位调yaw
+# _camera2gimbal第三位调pitch
+
+# #12mm camera
+# # 重投影误差: 0.0601px 12mm
+# camera_matrix: [3575.595557186291, 0, 660.6522530192485, 0, 3548.6107025779365, 630.7246558819783, 0, 0, 1]
+# distort_coeffs: [0.007593315540968868, -0.09500492030732975, 0.005121307769025103, -0.0003827026956162613, 3.422331685386428]
+# # # 相机同理想情况的偏角: yaw-3.03 pitch0.26 roll0.84 degree
+# # # 标定板到世界坐标系原点的水平距离: 3.39 m
+# # # 标定板同竖直摆放时的偏角: yaw10.51 pitch6.93 roll-1.85 degree
+# R_camera2gimbal: [0.05293871277740374, 0.003752714924705188, 0.9985907118635569, -0.9984910777682651, 0.01481590044 15254, 0.052877752515340645, -0.014596585444543545, -0.9998831962907464, 0.004531387068098422]
+# t_camera2gimbal: [0.19936918316981864, 0.031528539583439465, 0.003809688002070062]
+#####-----cboard参数-----#####
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xff
+can_interface: "can0"
+
+#####-----gimbal参数-----#####
+com_port: "/dev/ttyACM1"
+# 陀螺仪是否装错, 编号012分别代表电控坐标系ypr，想换旋转轴只需要对编号进行互换即可，负号就是对当前值取负，交换完再取负
+# 上车前记得对齐电控坐标系和济瞄惯性系
+gimbal_y1: 1
+gimbal_p2: 2
+gimbal_r3: 3
+# 济瞄的惯性系  z轴往上, x轴是枪管指向
+#     x  z
+#      \ |
+#       \|
+# y_ _ _ 0   z:yaw   x:roll   y:pitch
+
+
+#####-----planner-----#####
+target_dist_error: 0
+target_h_error: 0
+fire_thresh: 0.003 # 
+small_armor_tolerance: 0.15
+big_armor_tolerance: 0.22
+tower_and_base_armor_tolerance_: 0.10  # 26赛季前哨站和基地装甲板检测宽度
+gimbal_control_delay: 0.0
+tower_pitch_prediction_time: 0.05
+
+max_yaw_acc: 50
+Q_yaw: [9e6, 0]
+R_yaw: [1]
+
+max_pitch_acc: 100
+Q_pitch: [9e6,0]
+R_pitch: [1]

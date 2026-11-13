@@ -5,7 +5,6 @@
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 #include <thread>
-
 #include "io/camera/camera.hpp"
 #include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/aiming/planner/planner.hpp"
@@ -33,7 +32,7 @@ using namespace tools;
 
 const std::string keys =
   "{help h usage ? |                        | 输出命令行参数说明}"
-  "{@config-path   | ../configs/rb_auto_aim.yaml | 位置参数，yaml配置文件路径 }";
+  "{@config-path   | ../configs/sb_short.yaml | 位置参数，yaml配置文件路径 }";
 
 int main(int argc, char * argv[])
 {
@@ -51,7 +50,7 @@ int main(int argc, char * argv[])
   io::Gimbal gimbal(config_path);
   io::Camera camera(config_path);
 
-  auto_aim::YOLO yolo(config_path, true);
+  auto_aim::YOLO yolo(config_path, false);
   auto_aim::Detector detector(config_path, true);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, &solver);
@@ -70,7 +69,7 @@ int main(int argc, char * argv[])
 
     // 下发节拍：固定为绝对时刻 t0 + k*5ms，周期不再等于"解算耗时 + sleep"
     tools::tighten_timer_slack();
-    tools::PeriodicTimer tick(5ms);
+    tools::PeriodicTimer tick(10ms);
 
     while (!quit) {
       auto target = target_queue.front(); 
@@ -178,12 +177,13 @@ int main(int argc, char * argv[])
   while (!exiter.exit()) {
     camera.read(img, t);
     if (!img.empty()) systemd_watchdog.ping();
-    auto q = gimbal.q(t - 3ms);
+    auto q = gimbal.q(t - 2349us);
 
     solver.set_R_gimbal2world(q);
     auto armors = yolo.detect(img);
     auto targets = tracker.track(armors, t);
     // recor.record(img, q, t);
+
 
     auto now = std::chrono::steady_clock::now();
     double fps = 1./tools::delta_time(now, last_t);
@@ -225,18 +225,18 @@ int main(int argc, char * argv[])
     }
 
 
-    cv::resize(img, img, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
-    cv::imshow("reprojection", img);
-    auto key = cv::waitKey(1);
-    if (key == 'q') break;
-    if(key == 'u') {  // 运行时切换 UV / 传统观测，方便现场 A/B（切换后会 reset，下一帧用 PnP 重新初始化）
-      tracker.set_uv_enabled(!tracker.uv_enabled());
-      tools::logger()->info("[debug] obs mode -> {}", tracker.uv_enabled() ? "UV(pixel)" : "YPD(world)");
-    }
-    if(key == 'r') {//TUDO :右键手动更改
-      io::GimbalState* g_demo = gimbal.set_state_();
-      g_demo->mode = !g_demo->mode;
-    }
+    // cv::resize(img, img, {}, 0.5, 0.5);  // 显示时缩小图片尺寸q
+    // cv::imshow("reprojection", img);
+    // auto key = cv::waitKey(1);
+    // if (key == 'q') break;
+    // if(key == 'u') {  // 运行时切换 UV / 传统观测，方便现场 A/B（切换后会 reset，下一帧用 PnP 重新初始化）
+    //   tracker.set_uv_enabled(!tracker.uv_enabled());
+    //   tools::logger()->info("[debug] obs mode -> {}", tracker.uv_enabled() ? "UV(pixel)" : "YPD(world)");
+    // }
+    // if(key == 'r') {//TUDO :右键手动更改
+    //   io::GimbalState* g_demo = gimbal.set_state_();
+    //   g_demo->mode = !g_demo->mode;
+    // }
     // if(key == 's') {
     //   stopkey = !stopkey;
     // }

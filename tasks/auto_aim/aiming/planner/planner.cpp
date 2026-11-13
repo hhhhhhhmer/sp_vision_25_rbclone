@@ -430,9 +430,9 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   is_high = target_h > 1.3;
 
   // 每个规划周期都会执行，放 debug；否则 100~200 Hz 的控制循环会把控制台刷满。
-  tools::logger()->debug(
-    "h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", target_h, min_dist, xyz.norm(),
-    bullet_traj.fly_time);
+  // tools::logger()->debug(
+  //   "h:{}, xy_d:{}, xyz_d:{}, fly_time:{}, ", target_h, min_dist, xyz.norm(),
+  //   bullet_traj.fly_time);
 
   // 2. Get trajectory
   double yaw0;
@@ -590,7 +590,7 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
   // target_at_bullet.predict(-gimbal_delay_);
   // plan.fire = is_fire(gimbal_yaw / 57.3 - yaw_offset_, target_at_bullet, false);
   // plan.fire = is_fire(gimbal_yaw / 57.3 - yaw_offset_, target, false);
-  plan.fire = is_fire(plan.yaw, target, false);
+  plan.fire = is_fire(plan.yaw - yaw_offset_, target, false);
   // tools::logger()->warn("fire:{}", plan.fire);
   plan.target_yaw = (aim_target_yaw + yaw_offset_ )* 57.3;
 

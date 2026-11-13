@@ -9,7 +9,7 @@ int main() {
     serial::Serial ser;
     
     try {
-        ser.setPort("/dev/ttyACM0");
+        ser.setPort("/dev/ttyACM1");
         ser.setBaudrate(460800);
         
         serial::Timeout timeout = serial::Timeout::simpleTimeout(2);

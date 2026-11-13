@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 #include <thread>
@@ -136,6 +137,10 @@ int main(int argc, char * argv[])
 
         data["target_yaw"] = plan.target_yaw;
         data["target_pitch"] = plan.target_pitch;
+        // 只补偿弹丸飞行时间的目标 yaw（deg）：出膛前的发弹/云台延迟按 0 处理，
+        // 与 target_yaw 相减即可看出 gimbal_delay 等延迟带来的提前量
+        const double target_fly_yaw = planner.target_fly_yaw_deg(*target, gs.bullet_speed);
+        if (std::isfinite(target_fly_yaw)) data["target_fly_yaw"] = target_fly_yaw;
         data["target_z"] = target->ekf_x()[4];   //z
         data["target_vz"] = target->ekf_x()[5];  //vz
         data["tower_h1"] = target->tower_armor_hs[0];

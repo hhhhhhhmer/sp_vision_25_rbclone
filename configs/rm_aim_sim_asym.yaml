@@ -44,6 +44,10 @@ outpost_max_temp_lost_count: 75
 # 第一版接入先关闭多板融合和 UV 观测，只跑通“YOLO -> PnP -> EKF -> MPC”。
 # 静止/平移靶验证通过后，再按需打开做 A/B。
 multi_armor_fusion: true
+# 融合第二块及之后装甲板时的马氏距离门限（4 自由度卡方，99.9% 约 18.5）
+multi_armor_gate: 20.0
+# 融合第二块及之后装甲板时，其 PnP 朝向的噪声放大系数（仅 PnP 路径生效）
+multi_armor_angle_sigma_scale: 10.0
 uv_observation: true
 uv_sigma_px: 1.0             # 灯条端点检测噪声 (px)
 uv_sigma_len_ratio: 0.045    # 与灯条像素长度成比例的附加端点噪声（尺度不变项）
@@ -54,6 +58,18 @@ uv_associate_gate_px: 60.0   # 灯条中心像素距离关联门限
 uv_facing_cos_min: 0.15      # 可见性判据（装甲板法线与视线夹角余弦下限）
 uv_radius_prior_sigma: 0.02  # 单装甲退化保护：半径先验标准差 (m)
 uv_process_noise_z_scale: 0.05 # 深度过程噪声缩放：Q_z = v1*scale（v1=100 → 5），闭环自瞄下优先平滑
+
+# 窄窗 PnP 装甲朝向：UV 下 θ 只有"两条灯条间距"一路弱信息（正对时导数还是 0），
+# 用 ±20° 窄窗 PnP 补一个 σ≈5° 的 1 维观测；纯 UV 对照时可关。
+uv_pnp_yaw: true
+uv_pnp_yaw_sigma_deg: 5.0
+uv_pnp_yaw_window_deg: 20.0
+uv_pnp_yaw_steps: 20
+
+# PnP 回退/对照用；UV 模式下不生效
+meas_azimuth_sigma: 0.01
+meas_distance_sigma: 0.15
+meas_angle_sigma: 0.10
 
 # 整车中心加速度前馈：保留开关，默认关闭（不删除实现）。
 # 当前实现（0.25 s 拟合 + EMA + jerk 限制）在平移靶上净亏：

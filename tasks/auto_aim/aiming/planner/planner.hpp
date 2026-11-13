@@ -115,6 +115,20 @@ public:
   }
   /** @brief 使用步兵压制射击策略规划 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return 云台控制计划 */
   Plan rbplan(Target target, double bullet_speed, double gimbal_yaw);
+  /**
+   * @brief 只补偿弹丸飞行时间的目标参考 yaw（调试用）
+   *
+   * 与 rbplan() 写出的 plan.target_yaw 同口径（单位 deg，含 yaw_offset_），但把出膛前的
+   * 延迟（high/low_speed_delay_time + gimbal_delay）当作 0：目标先预测到当前时刻，
+   * 再只按弹丸飞行时间外推。因此 target_yaw - target_fly_yaw 就是发弹/云台延迟造成的
+   * 角度差，可直接用于对比 gimbal_delay 等延迟参数的补偿量。
+   *
+   * @param target 本帧目标（应为 planner.plan() 收到的原始目标，函数内拷贝，不修改）
+   * @param bullet_speed 弹速，单位 m/s
+   * @return 目标参考 yaw，单位 deg；目标无装甲板、弹道无解或预测失败时返回 NaN
+   * @note 选板沿用本帧 plan() 的结果（aim_armor_id_），保证与 target_yaw 是同一块板。
+   */
+  double target_fly_yaw_deg(const Target & target, double bullet_speed) const;
   /** @brief 使用哨兵策略规划 @param target 跟踪目标 @param bullet_speed 弹速 @param gimbal_yaw 当前云台偏航角 @return 云台控制计划 */
   Plan sbplan(Target target, double bullet_speed, double gimbal_yaw);
   /** @brief 判断步兵策略当前是否允许开火 @param target 跟踪目标 @param gimbal_yaw 当前云台偏航角 @param tower_fixed_pitch 是否使用前哨站固定俯仰约束 @return 允许开火时返回 true */

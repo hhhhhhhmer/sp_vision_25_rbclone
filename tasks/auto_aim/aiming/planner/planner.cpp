@@ -1,5 +1,6 @@
 #include "planner.hpp"
 
+#include <limits>
 #include <vector>
 #include <stdexcept>
 
@@ -596,6 +597,54 @@ Plan Planner::rbplan(Target target, double bullet_speed, double gimbal_yaw)
 
 
   return plan;
+}
+
+
+double Planner::target_fly_yaw_deg(const Target & target_in, double bullet_speed) const
+{
+  if (target_in.armor_xyza_list().empty()) return std::numeric_limits<double>::quiet_NaN();
+  if (bullet_speed < 10.0 || bullet_speed > 25.0) bullet_speed = 22.0;
+
+  try {
+    // 等价于 plan() 里 delay_time = 0：先把目标预测到当前时刻（只含图像年龄），
+    // 用当前几何估算飞行时间，再只按飞行时间外推，不含发弹/云台延迟。
+    Target target = target_in;
+    target.predict(std::chrono::steady_clock::now());
+
+    double min_dist = std::numeric_limits<double>::infinity();
+    Eigen::Vector3d xyz = Eigen::Vector3d::Zero();
+    for (const auto & xyza : target.armor_xyza_list()) {
+      const double dist = xyza.head<2>().norm();
+      if (dist < min_dist) {
+        min_dist = dist;
+        xyz = xyza.head<3>();
+      }
+    }
+    if (!std::isfinite(min_dist)) return std::numeric_limits<double>::quiet_NaN();
+
+    // 飞行时间估算口径与 rbplan() 一致（最近板 + 距离/高度补偿）
+    const tools::Trajectory bullet_traj(
+      bullet_speed, min_dist + target_dist_error_, xyz.z() + target_h_error_);
+    if (bullet_traj.unsolvable || !std::isfinite(bullet_traj.fly_time)) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    target.predict(bullet_traj.fly_time);
+
+    // 选板沿用本帧 plan() 的结果，保证与 target_yaw 比的是同一块板；未选中时退回纯最近板
+    int id = aim_armor_id_;
+    if (
+      id < 0 || id >= static_cast<int>(target.armor_xyza_list().size()) ||
+      aim_target_uuid_ != target.uuid()) {
+      id = target.select_aim_armor(-1);
+    }
+    const auto xyzad = target.aim_armor_xyzad(id);
+    if (!std::isfinite(xyzad(4))) return std::numeric_limits<double>::quiet_NaN();
+
+    // 与 rbplan() 的 plan.target_yaw 同口径：目标方位角 + yaw_offset_，单位 deg
+    return (std::atan2(xyzad(1), xyzad(0)) + yaw_offset_) * 57.3;
+  } catch (const std::exception &) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
 }
 
 
